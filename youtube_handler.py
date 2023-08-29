@@ -27,8 +27,9 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
             return self.response.url
      
 
-    def set_url_callback(self, callback: URLRequestCallback):
+    def set_url_callback(self, callback: URLRequestCallback, event_loop: asyncio.AbstractEventLoop | None = None):
         self._url_callback = callback
+        self._url_callback_event_loop = event_loop or asyncio.get_event_loop()
 
     async def urlopen_async(self, req: urllib.request.Request | str) -> WrappedResponse:
         """ Start an HTTP download """
@@ -38,7 +39,8 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
         else:
             remote_req = RemoteURLRequest.from_urllib_request(req)
 
-        res = await self._url_callback(remote_req)
+        #res = await self._url_callback(remote_req)
+        res = asyncio.run_coroutine_threadsafe(self._url_callback(remote_req), self._url_callback_event_loop).result()
         
             
         # TODO: add saved cookies to request
@@ -78,7 +80,7 @@ class YouTubeExtraction:
             'outtmpl': '%(id)s%(ext)s',
             'quiet': True,
         })
-        self.ytdl.set_url_callback(url_request_callback)
+        self.ytdl.set_url_callback(url_request_callback, event_loop=asyncio.get_event_loop())
 
     async def extract(self):
         def _extract():

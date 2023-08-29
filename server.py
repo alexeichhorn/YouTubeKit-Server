@@ -23,8 +23,6 @@ async def websocket_handler(request: web.Request):
         )
         await ws.send_str(message.model_dump_json())
 
-        print(await ws.receive())
-
         raw_response = await ws.receive_str()
         response = RemoteURLResponse.model_validate_json(raw_response)
         print(response)
