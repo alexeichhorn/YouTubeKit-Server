@@ -39,6 +39,12 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
         else:
             remote_req = RemoteURLRequest.from_urllib_request(req)
 
+        # add default user-agent if not set
+        lower_header_keys = [k.lower() for k in remote_req.headers.keys()]
+        if 'user-agent' not in lower_header_keys:
+            remote_req.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' \
+                                               '(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+
         #res = await self._url_callback(remote_req)
         res = asyncio.run_coroutine_threadsafe(self._url_callback(remote_req), self._url_callback_event_loop).result()
         
@@ -107,14 +113,20 @@ class YouTubeExtraction:
             video_bitrate = format.get('vbr')
             video_bitrate = int(video_bitrate * 1000) if video_bitrate else None
 
-            codecs = [format.get('vcodec'), format.get('acodec')] #, format.get('scodec')]
-            codecs = [c for c in codecs if c is not None and c != 'none']
+            video_codec = format.get('vcodec')
+            if video_codec == 'none':
+                video_codec = None
+
+            audio_codec = format.get('acodec')
+            if audio_codec == 'none':
+                audio_codec = None
 
             stream = YouTubeStream(
                 url=format['url'],
                 itag=itag,
                 ext=format['ext'],
-                codecs=codecs,
+                video_codec=video_codec,
+                audio_codec=audio_codec,
                 average_bitrate=average_bitrate,
                 audio_bitrate=audio_bitrate,
                 video_bitrate=video_bitrate,

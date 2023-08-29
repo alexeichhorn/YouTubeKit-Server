@@ -23,17 +23,21 @@ async def websocket_handler(request: web.Request):
         )
         await ws.send_str(message.model_dump_json())
 
-        raw_response = await ws.receive_str()
+        raw_response_bytes = await ws.receive_bytes()
+        raw_response = raw_response_bytes.decode('utf-8')
         response = RemoteURLResponse.model_validate_json(raw_response)
-        print(response)
+
         return response
         
 
     yt = YouTubeExtraction(video_id, url_request_callback=handle_url_request)
-    await yt.extract()
+    streams = await yt.extract()
 
-    #async for msg in ws:
-    #    print(msg)
+    message = WebSocketServerMessage(
+        type='result',
+        content=streams,
+    )
+    await ws.send_str(message.model_dump_json())
 
     return ws
 
