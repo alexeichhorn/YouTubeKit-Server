@@ -1,0 +1,10 @@
+# server
+aiohttp
+websockets
+
+# youtube downloader
+yt-dlp
+
+# other
+python-dotenv
+pydantic
