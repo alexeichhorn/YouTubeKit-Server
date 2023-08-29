@@ -32,7 +32,7 @@ async def main():
             )
 
     yt = YouTubeExtraction("2lAe1cqCOXo", url_callback)
-    await yt.extract()
+    print(await yt.extract())
 
 
 if __name__ == '__main__':

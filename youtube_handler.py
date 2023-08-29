@@ -6,7 +6,7 @@ from typing import Awaitable, Callable, Literal
 import requests
 import yt_dlp
 
-from models import RemoteURLRequest, RemoteURLResponse
+from models import RemoteURLRequest, RemoteURLResponse, YouTubeStream
 
 URLRequestCallback = Callable[[RemoteURLRequest], Awaitable[RemoteURLResponse]]
 
@@ -82,14 +82,44 @@ class YouTubeExtraction:
         })
         self.ytdl.set_url_callback(url_request_callback, event_loop=asyncio.get_event_loop())
 
-    async def extract(self):
+    async def extract(self) -> list[YouTubeStream]:
         def _extract():
             return self.ytdl.extract_info(self.video_id, download=False)
 
         info_dict = await asyncio.to_thread(_extract)
-        #print(info_dict)
-        print(len(info_dict))
-        print(len(info_dict['formats']))
 
-        import json
-        print(json.dumps(info_dict['formats'][0:20]))
+        if not info_dict:
+            raise Exception("Invalid youtube-dl response")
+
+        streams = []
+        for format in info_dict['formats']:
+            
+            itag = format['format_id']
+            if not itag.isnumeric():
+                continue
+
+            average_bitrate = format.get('tbr')
+            average_bitrate = int(average_bitrate * 1000) if average_bitrate else None
+
+            audio_bitrate = format.get('abr')
+            audio_bitrate = int(audio_bitrate * 1000) if audio_bitrate else None
+
+            video_bitrate = format.get('vbr')
+            video_bitrate = int(video_bitrate * 1000) if video_bitrate else None
+
+            codecs = [format.get('vcodec'), format.get('acodec')] #, format.get('scodec')]
+            codecs = [c for c in codecs if c is not None and c != 'none']
+
+            stream = YouTubeStream(
+                url=format['url'],
+                itag=itag,
+                ext=format['ext'],
+                codecs=codecs,
+                average_bitrate=average_bitrate,
+                audio_bitrate=audio_bitrate,
+                video_bitrate=video_bitrate,
+                filesize=format.get('filesize'),
+            )
+            streams.append(stream)
+
+        return streams

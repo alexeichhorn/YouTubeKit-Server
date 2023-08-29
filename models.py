@@ -33,6 +33,19 @@ class RemoteURLResponse(BaseModel):
 
 
 
+# YouTube streams
+
+class YouTubeStream(BaseModel):
+    url: str
+    itag: int
+    ##mime_type: str
+    ext: str
+    codecs: list[str]
+    average_bitrate: int | None
+    audio_bitrate: int | None
+    video_bitrate: int | None
+    filesize: int | None
+
 
 # Websocket wrappers
 
