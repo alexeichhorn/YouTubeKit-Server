@@ -41,8 +41,14 @@ async def websocket_handler(request: web.Request):
 
     return ws
 
+
+async def ping_handler(request: web.Request):
+    return web.Response(text='pong')
+    
+
 app = web.Application()
 app.add_routes([web.get('/v1', websocket_handler)])
+app.router.add_get('/ping', ping_handler)
 
 if __name__ == '__main__':
     web.run_app(app, host="127.0.0.1", port=8080)

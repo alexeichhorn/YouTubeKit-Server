@@ -3,7 +3,6 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Awaitable, Callable, Literal
 
-import requests
 import yt_dlp
 
 from models import RemoteURLRequest, RemoteURLResponse, YouTubeStream
