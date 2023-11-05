@@ -1,10 +1,10 @@
 # server
-aiohttp
-websockets
+aiohttp>=3.7.1
+websockets>=11.0.3
 
 # youtube downloader
 yt-dlp
 
 # other
-python-dotenv
-pydantic
+python-dotenv>=1.0.0
+pydantic>=2.3.0
