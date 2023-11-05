@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import base64
 import urllib.request
-from pydantic import BaseModel
 from typing import Any, Literal
+
+from pydantic import BaseModel
+from yt_dlp.networking.common import Request as YTDLRequest
 
 
 class RemoteURLRequest(BaseModel): 
@@ -27,10 +30,19 @@ class RemoteURLRequest(BaseModel):
             self.body = base64.b64encode(self.body)
 
     @staticmethod
-    def from_urllib_request(req: urllib.request.Request):
+    def from_urllib_request(req: urllib.request.Request) -> RemoteURLRequest:
         return RemoteURLRequest(
             url=req.full_url,
             method=req.get_method(),
+            body=req.data, # type: ignore
+            headers=dict(req.headers),
+        )
+    
+    @staticmethod
+    def from_ytdl_request(req: YTDLRequest) -> RemoteURLRequest:
+        return RemoteURLRequest(
+            url=req.url,
+            method=req.method,
             body=req.data, # type: ignore
             headers=dict(req.headers),
         )

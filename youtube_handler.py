@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Awaitable, Callable, Literal
 
 import yt_dlp
+from yt_dlp.networking.common import Request as YTDLRequest
 
 from models import RemoteURLRequest, RemoteURLResponse, YouTubeStream
 
@@ -22,8 +23,16 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
         def headers(self):
             return self.response.headers
 
-        def geturl(self):
+        @property
+        def url(self) -> str:
             return self.response.url
+
+        def geturl(self) -> str:
+            return self.response.url
+        
+        @property
+        def status(self) -> int:
+            return self.response.status_code or 500
      
 
     def set_url_callback(self, callback: URLRequestCallback, event_loop: asyncio.AbstractEventLoop | None = None):
@@ -35,6 +44,8 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
 
         if isinstance(req, str):
             remote_req = RemoteURLRequest(url=req, method="GET")
+        elif isinstance(req, YTDLRequest):
+            remote_req = RemoteURLRequest.from_ytdl_request(req)
         else:
             remote_req = RemoteURLRequest.from_urllib_request(req)
 
