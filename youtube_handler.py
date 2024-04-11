@@ -15,8 +15,13 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
     class WrappedResponse:
         def __init__(self, response: RemoteURLResponse):
             self.response = response
+            self.read_pointer = 0
 
-        def read(self) -> bytes:
+        def read(self, block_size: int | None = None) -> bytes:
+            if block_size is not None:
+                data = self.response.data[self.read_pointer:self.read_pointer + block_size]
+                self.read_pointer += block_size
+                return data
             return self.response.data
         
         @property

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 import websockets
 from aiohttp import web
@@ -51,4 +52,5 @@ app.add_routes([web.get('/v1', websocket_handler)])
 app.router.add_get('/ping', ping_handler)
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     web.run_app(app, host="127.0.0.1", port=8080)
