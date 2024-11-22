@@ -8,12 +8,31 @@ from aiohttp import web
 
 from models import RemoteURLRequest, RemoteURLResponse, WebSocketServerMessage
 from youtube_handler import YouTubeExtraction
+from rate_limiter import RateLimiter
+from typing import Final
 
+RATE_LIMIT_WINDOW: Final = 60.0  # 1 minute window
+RATE_LIMIT_MAX_REQUESTS: Final = 10  # num requests per window
+
+rate_limiter = RateLimiter(RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_REQUESTS)
 
 async def websocket_handler(request: web.Request):
     video_id = request.query.get('videoID')
     if not (isinstance(video_id, str) and len(video_id) == 11):
         return web.Response(status=400)
+
+    # check rate limit per user agent
+    if not rate_limiter.is_allowed(request):
+        return web.Response(
+            status=429,
+            text=json.dumps({
+                "error": "Too many requests",
+                "retry_after": RATE_LIMIT_WINDOW
+            }),
+            content_type='application/json'
+        )
+
+    rate_limiter.add_request(request)
 
     ws = web.WebSocketResponse()
     await ws.prepare(request)
