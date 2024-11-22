@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 import websockets
 from aiohttp import web
@@ -30,6 +31,7 @@ async def websocket_handler(request: web.Request):
 
         return response
         
+    start_time = time.time()
 
     yt = YouTubeExtraction(video_id, url_request_callback=handle_url_request)
     streams = await yt.extract()
@@ -39,6 +41,8 @@ async def websocket_handler(request: web.Request):
         content=streams,
     )
     await ws.send_str(message.model_dump_json())
+
+    logging.info(f'Request for {video_id} took {time.time() - start_time} seconds')
 
     return ws
 
