@@ -23,6 +23,7 @@ async def websocket_handler(request: web.Request):
 
     # check rate limit per user agent
     if not rate_limiter.is_allowed(request):
+        logging.info(f"Rate limit exceeded for {request.headers.get('User-Agent', 'unknown')}")
         return web.Response(
             status=429,
             text=json.dumps({
