@@ -19,6 +19,8 @@ async def websocket_handler(request: web.Request):
     await ws.prepare(request)
 
     async def handle_url_request(req: RemoteURLRequest) -> RemoteURLResponse:
+        req_start_time = time.time()
+
         message = WebSocketServerMessage(
             type='urlRequest',
             content=req,
@@ -28,6 +30,8 @@ async def websocket_handler(request: web.Request):
         raw_response_bytes = await ws.receive_bytes()
         raw_response = raw_response_bytes.decode('utf-8')
         response = RemoteURLResponse.model_validate_json(raw_response)
+
+        logging.info(f'[{video_id}] URL request for "{req.url}" took {time.time() - req_start_time:.2f} seconds')
 
         return response
         
