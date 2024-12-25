@@ -9,7 +9,7 @@ import os
 logging.basicConfig(level=logging.INFO)
 
 # Calculate number of workers based on CPU cores
-workers = os.environ.get('WEB_CONCURRENCY', (multiprocessing.cpu_count() * 2) + 1)
+workers = os.environ.get('NUM_WORKERS', (multiprocessing.cpu_count() * 2) + 1)
 print(f"Using {workers} workers")
 
 # Gunicorn config
