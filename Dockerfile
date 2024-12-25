@@ -1,13 +1,13 @@
-FROM python:3.10-alpine3.18
+FROM python:3.10-slim
 
 # Install dependencies
-ADD requirements.txt .
+COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-ADD . /app
-
 WORKDIR /app
+COPY . /app
 
 EXPOSE 8080
 
-CMD ["python", "production_server.py"]
+# Run with gunicorn directly using the config file
+CMD ["gunicorn", "server:app", "-c", "production_server.py"]

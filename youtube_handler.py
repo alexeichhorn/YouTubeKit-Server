@@ -1,17 +1,14 @@
-import asyncio
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
-from typing import Awaitable, Callable, Literal
+from typing import Callable
 
 import yt_dlp
 from yt_dlp.networking.common import Request as YTDLRequest
 
 from models import RemoteURLRequest, RemoteURLResponse, YouTubeStream
 
-URLRequestCallback = Callable[[RemoteURLRequest], Awaitable[RemoteURLResponse]]
+URLRequestCallback = Callable[[RemoteURLRequest], RemoteURLResponse]
 
 class FakeYoutubeDL(yt_dlp.YoutubeDL):
-
     class WrappedResponse:
         def __init__(self, response: RemoteURLResponse):
             self.response = response
@@ -38,15 +35,12 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
         @property
         def status(self) -> int:
             return self.response.status_code or 500
-     
 
-    def set_url_callback(self, callback: URLRequestCallback, event_loop: asyncio.AbstractEventLoop | None = None):
+    def set_url_callback(self, callback: URLRequestCallback):
         self._url_callback = callback
-        self._url_callback_event_loop = event_loop or asyncio.get_event_loop()
 
-    async def urlopen_async(self, req: urllib.request.Request | str) -> WrappedResponse:
+    def urlopen(self, req: urllib.request.Request | str) -> WrappedResponse:
         """ Start an HTTP download """
-
         if isinstance(req, str):
             remote_req = RemoteURLRequest(url=req, method="GET")
         elif isinstance(req, YTDLRequest):
@@ -60,61 +54,26 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
             remote_req.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' \
                                                '(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 
-        #res = await self._url_callback(remote_req)
-        res = asyncio.run_coroutine_threadsafe(self._url_callback(remote_req), self._url_callback_event_loop).result()
-        
-            
-        # TODO: add saved cookies to request
-
-        # if req.get_method() == "GET":
-        #     res = requests.get(req.full_url, headers=req.headers)
-        #     x = WrappedResponse(res)
-
-        # elif req.get_method() == "POST":
-        #     res = requests.post(req.full_url, headers=req.headers, data=req.data)
-        #     x = WrappedResponse(res)
-
-        # else:
-        #     raise NotImplementedError(f"Method {req.get_method()} not implemented")
-            
+        res = self._url_callback(remote_req)
         return self.WrappedResponse(res)
-    
-
-
-    def urlopen(self, req: urllib.request.Request | str) -> WrappedResponse:
-        """ Start an HTTP download """
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        task = loop.create_task(self.urlopen_async(req))
-        loop.run_until_complete(task)
-        return task.result()
-        
-
-
 
 class YouTubeExtraction:
-
     def __init__(self, video_id: str, url_request_callback: URLRequestCallback):
         self.video_id = video_id
         self.ytdl = FakeYoutubeDL({
             'outtmpl': '%(id)s%(ext)s',
             'quiet': True,
         })
-        self.ytdl.set_url_callback(url_request_callback, event_loop=asyncio.get_event_loop())
+        self.ytdl.set_url_callback(url_request_callback)
 
-    async def extract(self) -> list[YouTubeStream]:
-        def _extract():
-            return self.ytdl.extract_info(self.video_id, download=False)
-
-        info_dict = await asyncio.to_thread(_extract)
+    def extract(self) -> list[YouTubeStream]:
+        info_dict = self.ytdl.extract_info(self.video_id, download=False)
 
         if not info_dict:
             raise Exception("Invalid youtube-dl response")
 
         streams = []
         for format in info_dict['formats']:
-            
             itag = format['format_id']
             if not itag.isnumeric():
                 continue

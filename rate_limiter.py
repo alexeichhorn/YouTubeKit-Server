@@ -2,7 +2,7 @@ from collections import defaultdict
 import time
 from dataclasses import dataclass
 from typing import DefaultDict
-from aiohttp import web
+from flask import Request
 
 
 @dataclass
@@ -29,19 +29,18 @@ class RateLimiter:
             lambda: RateLimitState([], window_size, max_requests)
         )
 
-    def key_is_allowed(self, key: str) -> bool:
+    def _get_key(self, request: Request) -> str:
+        """Get a unique key for rate limiting based on User-Agent and IP"""
+        user_agent = request.headers.get('User-Agent', 'unknown')
+        ip = request.remote_addr or 'unknown'
+        return f"{user_agent}:{ip}"
+
+    def is_allowed(self, request: Request) -> bool:
+        """Check if request is allowed based on rate limits"""
+        key = self._get_key(request)
         return self.states[key].is_allowed()
-
-    def add_request_key(self, key: str) -> None:
-        self.states[key].add_request() 
-
-    def _get_key(self, request: web.Request) -> str:
-        return request.headers.get('User-Agent', 'unknown')
-
-    def is_allowed(self, request: web.Request) -> bool:
-        user_agent = self._get_key(request)
-        return self.key_is_allowed(user_agent)
     
-    def add_request(self, request: web.Request) -> None:
-        user_agent = self._get_key(request)
-        self.add_request_key(user_agent)
+    def add_request(self, request: Request) -> None:
+        """Record a request for rate limiting"""
+        key = self._get_key(request)
+        self.states[key].add_request()
