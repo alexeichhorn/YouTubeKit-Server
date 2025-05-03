@@ -51,8 +51,34 @@ export class YouTubeService {
       };
 
       // Listen for messages from client
-      this.websocket.addEventListener('message', event => {
-         console.log('Received message', event.data);
+      this.websocket.addEventListener('message', async event => {
+         console.log('Received message', event.data); // TODO: remove
+         try {
+            let messageData: string;
+            const data: any = event.data; // Explicitly cast to any for instanceof checks
+
+            if (data instanceof ArrayBuffer) {
+               // Decode ArrayBuffer to string (assuming UTF-8)
+               messageData = new TextDecoder().decode(data);
+            } else if (data instanceof Blob) {
+               // Decode Blob to string (assuming UTF-8)
+               messageData = await data.text();
+            } else if (typeof data === 'string') {
+               messageData = data;
+            } else {
+               console.error('Received unexpected message data type:', typeof data);
+               return;
+            }
+
+            const parsed = JSON.parse(messageData) as RemoteURLResponse;
+            const cont = inflightFetches.get(parsed.id);
+            if (cont) {
+               inflightFetches.delete(parsed.id);
+               cont(parsed);
+            }
+         } catch (error: any) {
+            console.error('Bad message from client', error);
+         }
       });
 
       try {
