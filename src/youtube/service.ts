@@ -234,8 +234,8 @@ export class YouTubeService {
    // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube): Promise<RemoteStream[]> {
-      //   const clients: AvailableInnertubeClient[] = ['IOS', 'WEB_EMBEDDED'];
-      const clients: AvailableInnertubeClient[] = ['IOS'];
+      const clients: AvailableInnertubeClient[] = ['IOS', 'WEB_EMBEDDED'];
+      //   const clients: AvailableInnertubeClient[] = ['WEB_EMBEDDED'];
       let allStreams: RemoteStream[] = [];
 
       for (const client of clients) {
@@ -256,28 +256,49 @@ export class YouTubeService {
       const formats = [...(f.formats ?? []), ...(f.adaptive_formats ?? [])];
 
       const allStreams: (RemoteStream | null)[] = formats.map(format => {
-         let streamUrl = format.url;
-         if (!streamUrl && format.signature_cipher) {
-            streamUrl = format.decipher(innertube.session.player);
-         }
+         const streamUrl = format.decipher(innertube.session.player) ?? (format as any).deciphered_url ?? format.url;
 
          if (!streamUrl) {
             return null;
          }
 
+         if (format.is_dubbed) {
+            console.log('Skip dubbed streams');
+            return null;
+         }
+
+         const mimeType = format.mime_type;
+         let videoCodec: string | undefined = undefined;
+         let audioCodec: string | undefined = undefined;
+
+         if (mimeType?.includes('codecs=')) {
+            const codecString = mimeType.split('codecs=')[1]?.replace(/"/g, '') || '';
+            // Split by comma and potential space
+            const codecs = codecString
+               .split(',')
+               .map(c => c.trim())
+               .filter(c => c.length > 0);
+
+            if (format.has_video && format.has_audio && codecs.length >= 2) {
+               // Assuming the typical order is video, then audio
+               videoCodec = codecs[0];
+               audioCodec = codecs[1];
+            } else if (format.has_video && codecs.length >= 1) {
+               videoCodec = codecs[0];
+            } else if (format.has_audio && codecs.length >= 1) {
+               audioCodec = codecs[0];
+            }
+         }
+
          const stream: RemoteStream = {
             url: streamUrl,
             itag: format.itag,
-            ext: format.mime_type?.split('/')[1]?.split(';')[0] || 'unknown',
-            video_codec: format.mime_type?.includes('video')
-               ? format.mime_type.split('codecs=')[1]?.split(',')[0]?.replace(/"/g, '') || undefined
-               : undefined,
-            audio_codec: format.mime_type?.includes('audio')
-               ? format.mime_type.split('codecs=')[1]?.split(',')[0]?.replace(/"/g, '') || undefined
-               : undefined,
+            ext: mimeType?.split('/')[1]?.split(';')[0] || 'unknown',
+            video_codec: videoCodec,
+            audio_codec: audioCodec,
             average_bitrate: format.bitrate || undefined,
-            audio_bitrate: format.bitrate || undefined,
-            video_bitrate: format.bitrate || undefined,
+            audio_bitrate: format.has_audio ? format.bitrate : undefined,
+            video_bitrate: format.has_video ? format.bitrate : undefined,
             filesize: format.content_length ? Number(format.content_length) : undefined,
          };
          return stream;
