@@ -3,6 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2025-05-03"
 
 # Limit CPU execution [in milliseconds]
+[limits]
 cpu_ms = 1000
 
 [observability]
