@@ -1,0 +1,23 @@
+name = "youtubekit-server"
+main = "src/index.ts"
+compatibility_date = "2025-05-03"
+
+# Limit CPU execution [in milliseconds]
+cpu_ms = 1000
+
+[observability]
+enabled = true
+
+# [placement]
+# mode = "smart"
+
+# Variables will be loaded from .dev.vars for local development
+[vars]
+
+
+
+
+# Production environment --------------------------------------------------------
+
+[env.production]
+name = "youtubekit-server-production"
