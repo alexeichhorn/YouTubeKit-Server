@@ -4,6 +4,12 @@ import { ServerMessage, ServerMessageType, RemoteURLResponse, RemoteURLRequest, 
 export class YouTubeService {
    readonly videoID: string;
    private websocket: WebSocket;
+   private inflightFetches = new Map<string, (msg: RemoteURLResponse) => void>();
+
+   // State for handling incoming chunked messages, keyed by packetId (stringified)
+   private chunkBuffers = new Map<string, { buffer: ArrayBuffer[]; expectedTotal: number; receivedCount: number }>();
+   // Fixed 12-byte header: packetId (4), chunkIndex (4), totalChunks (4)
+   private static readonly CHUNK_HEADER_SIZE = 12;
 
    constructor(videoID: string, websocket: WebSocket) {
       this.videoID = videoID;
@@ -15,8 +21,6 @@ export class YouTubeService {
    }
 
    async start() {
-      const inflightFetches = new Map<string, (msg: RemoteURLResponse) => void>();
-
       const wsFetch: typeof fetch = async (input, init = {}) => {
          const req = new Request(input, init);
          const id = crypto.randomUUID();
@@ -39,7 +43,7 @@ export class YouTubeService {
          // Wait for the matching response
          const responsePromise = new Promise<RemoteURLResponse>((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('Client fetch timeout')), 30_000);
-            inflightFetches.set(id, msg => {
+            this.inflightFetches.set(id, msg => {
                clearTimeout(timer);
                resolve(msg);
             });
@@ -52,32 +56,34 @@ export class YouTubeService {
 
       // Listen for messages from client
       this.websocket.addEventListener('message', async event => {
-         console.log('Received message', event.data); // TODO: remove
          try {
-            let messageData: string;
             const data: any = event.data; // Explicitly cast to any for instanceof checks
 
             if (data instanceof ArrayBuffer) {
-               // Decode ArrayBuffer to string (assuming UTF-8)
-               messageData = new TextDecoder().decode(data);
+               if (data.byteLength >= YouTubeService.CHUNK_HEADER_SIZE) {
+                  await this.handleChunk(data);
+               } else {
+                  console.warn(`Received small ArrayBuffer (size: ${data.byteLength}), processing as non-chunked.`);
+                  this.processCompleteMessage(new TextDecoder().decode(data));
+               }
             } else if (data instanceof Blob) {
-               // Decode Blob to string (assuming UTF-8)
-               messageData = await data.text();
+               const arrayBuffer = await data.arrayBuffer();
+               if (arrayBuffer.byteLength >= YouTubeService.CHUNK_HEADER_SIZE) {
+                  await this.handleChunk(arrayBuffer);
+               } else {
+                  console.warn(`Received small Blob message (size: ${arrayBuffer.byteLength}), processing as non-chunked.`);
+                  this.processCompleteMessage(new TextDecoder().decode(arrayBuffer));
+               }
             } else if (typeof data === 'string') {
-               messageData = data;
+               // Should ideally not happen if client always sends ArrayBuffer for chunked
+               console.warn('Received unexpected string message, processing as non-chunked.');
+               this.processCompleteMessage(data);
             } else {
                console.error('Received unexpected message data type:', typeof data);
-               return;
-            }
-
-            const parsed = JSON.parse(messageData) as RemoteURLResponse;
-            const cont = inflightFetches.get(parsed.id);
-            if (cont) {
-               inflightFetches.delete(parsed.id);
-               cont(parsed);
             }
          } catch (error: any) {
-            console.error('Bad message from client', error);
+            console.error('Error processing message from client:', error);
+            // Consider adding cleanup logic here or a timeout mechanism for stale buffers
          }
       });
 
@@ -95,7 +101,136 @@ export class YouTubeService {
       }
    }
 
-   // -
+   // - Chunk Handling Methods (Updated for Fixed 12-byte Header) -
+
+   private async handleChunk(chunkData: ArrayBuffer): Promise<void> {
+      if (chunkData.byteLength < YouTubeService.CHUNK_HEADER_SIZE) {
+         console.error(`Chunk too small for header (size: ${chunkData.byteLength}, needed: ${YouTubeService.CHUNK_HEADER_SIZE})`);
+         return;
+      }
+      const headerView = new DataView(chunkData, 0, YouTubeService.CHUNK_HEADER_SIZE);
+      let packetId: number | undefined;
+
+      try {
+         // 1. Read Packet Identifier (UInt32 BE)
+         packetId = headerView.getUint32(0, false); // false for big-endian
+         const packetIdStr = packetId.toString(); // Use string for map key
+
+         // 2. Read Chunk Index (UInt32 BE)
+         const chunkIndex = headerView.getUint32(4, false);
+
+         // 3. Read Total Chunks (UInt32 BE)
+         const totalChunks = headerView.getUint32(8, false);
+
+         // 4. Extract Payload
+         const payload = chunkData.slice(YouTubeService.CHUNK_HEADER_SIZE);
+
+         // console.log(`Received chunk ${chunkIndex + 1}/${totalChunks} for Packet ID ${packetIdStr}, size ${payload.byteLength}`); // DEBUG
+
+         // --- State Management ---
+         let state = this.chunkBuffers.get(packetIdStr);
+
+         if (chunkIndex === 0) {
+            if (state && state.receivedCount > 0) {
+               console.warn(`Received chunk 0 for Packet ID ${packetIdStr} while previous msg incomplete. Resetting.`);
+            }
+            state = { buffer: new Array(totalChunks), expectedTotal: totalChunks, receivedCount: 0 };
+            this.chunkBuffers.set(packetIdStr, state);
+         } else if (!state) {
+            console.error(`Received chunk ${chunkIndex + 1} for unknown/expired Packet ID ${packetIdStr}. Discarding.`);
+            return;
+         }
+
+         if (totalChunks !== state.expectedTotal) {
+            console.error(
+               `Chunk total mismatch for Packet ID ${packetIdStr}: received ${totalChunks}, expected ${state.expectedTotal}. Discarding buffer.`
+            );
+            this.chunkBuffers.delete(packetIdStr);
+            return;
+         }
+
+         if (chunkIndex >= state.expectedTotal || state.buffer[chunkIndex]) {
+            console.warn(`Duplicate or invalid chunk index ${chunkIndex + 1} for Packet ID ${packetIdStr}. Ignoring.`);
+            return;
+         }
+
+         // Store chunk & update count
+         state.buffer[chunkIndex] = payload;
+         state.receivedCount++;
+
+         // Check completion
+         if (state.receivedCount === state.expectedTotal) {
+            // console.log(`Message complete for Packet ID ${packetIdStr}. Reassembling.`); // DEBUG
+            await this.reassembleAndProcess(packetIdStr);
+         }
+      } catch (error: any) {
+         console.error('Error handling chunk:', error);
+         if (packetId !== undefined && this.chunkBuffers.has(packetId.toString())) {
+            console.log(`Cleaning up buffer for Packet ID ${packetId} due to error.`);
+            this.chunkBuffers.delete(packetId.toString());
+         }
+      }
+   }
+
+   private async reassembleAndProcess(packetIdStr: string): Promise<void> {
+      const state = this.chunkBuffers.get(packetIdStr);
+      if (!state) {
+         console.error(`Attempted to reassemble non-existent Packet ID: ${packetIdStr}`);
+         return;
+      }
+
+      try {
+         // Verify all chunks are present before assembling
+         for (let i = 0; i < state.expectedTotal; i++) {
+            if (!state.buffer[i]) {
+               throw new Error(`Missing chunk ${i + 1} during final reassembly for Packet ID ${packetIdStr}`);
+            }
+         }
+
+         const completeBuffer = await this.reassembleChunks(state.buffer);
+         const messageData = new TextDecoder().decode(completeBuffer);
+         this.processCompleteMessage(messageData);
+      } catch (e) {
+         console.error(`Failed to reassemble or process Packet ID ${packetIdStr}:`, e);
+      } finally {
+         // Always remove buffer after processing attempt
+         this.chunkBuffers.delete(packetIdStr);
+      }
+   }
+
+   private async reassembleChunks(buffer: ArrayBuffer[]): Promise<ArrayBuffer> {
+      // Calculate total size
+      const totalSize = buffer.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const reassembled = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of buffer) {
+         // Already validated chunks exist in reassembleAndProcess
+         reassembled.set(new Uint8Array(chunk), offset);
+         offset += chunk.byteLength;
+      }
+      return reassembled.buffer;
+   }
+
+   // Processes a fully reassembled message string
+   private processCompleteMessage(messageData: string): void {
+      // console.log('Processing complete message:', messageData.substring(0, 100) + '...'); // DEBUG
+      try {
+         const parsed = JSON.parse(messageData) as RemoteURLResponse;
+         const callback = this.inflightFetches.get(parsed.id);
+         if (callback) {
+            // Note: The message ID (parsed.id) inside the JSON payload is the one
+            // used for matching the original request, NOT the packetId used for chunking.
+            this.inflightFetches.delete(parsed.id);
+            callback(parsed);
+         } else {
+            console.warn(`Received response for unknown or timed out request ID: ${parsed.id}`);
+         }
+      } catch (error: any) {
+         console.error('Bad message format or JSON parse error:', error, 'Data:', messageData.substring(0, 200) + '...');
+      }
+   }
+
+   // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube): Promise<RemoteStream[]> {
       const info = await innertube.getInfo(this.videoID);
