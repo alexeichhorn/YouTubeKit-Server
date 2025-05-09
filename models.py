@@ -3,12 +3,14 @@ from __future__ import annotations
 import base64
 import urllib.request
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel
 from yt_dlp.networking.common import Request as YTDLRequest
 
 
 class RemoteURLRequest(BaseModel): 
+    id: str
     url: str
     method: str
     body: bytes | None = None
@@ -32,6 +34,7 @@ class RemoteURLRequest(BaseModel):
     @staticmethod
     def from_urllib_request(req: urllib.request.Request) -> RemoteURLRequest:
         return RemoteURLRequest(
+            id=str(uuid4()),
             url=req.full_url,
             method=req.get_method(),
             body=req.data, # type: ignore
@@ -41,6 +44,7 @@ class RemoteURLRequest(BaseModel):
     @staticmethod
     def from_ytdl_request(req: YTDLRequest) -> RemoteURLRequest:
         return RemoteURLRequest(
+            id=str(uuid4()),
             url=req.url,
             method=req.method,
             body=req.data, # type: ignore

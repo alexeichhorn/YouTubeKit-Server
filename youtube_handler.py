@@ -2,6 +2,7 @@ import asyncio
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Awaitable, Callable, Literal
+from uuid import uuid4
 
 import yt_dlp
 from yt_dlp.networking.common import Request as YTDLRequest
@@ -48,7 +49,7 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
         """ Start an HTTP download """
 
         if isinstance(req, str):
-            remote_req = RemoteURLRequest(url=req, method="GET")
+            remote_req = RemoteURLRequest(id=str(uuid4()), url=req, method="GET")
         elif isinstance(req, YTDLRequest):
             remote_req = RemoteURLRequest.from_ytdl_request(req)
         else:
