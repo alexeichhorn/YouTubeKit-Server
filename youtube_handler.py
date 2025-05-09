@@ -1,5 +1,6 @@
 import urllib.request
 from typing import Callable
+from uuid import uuid4
 
 import yt_dlp
 from yt_dlp.networking.common import Request as YTDLRequest
@@ -42,7 +43,7 @@ class FakeYoutubeDL(yt_dlp.YoutubeDL):
     def urlopen(self, req: urllib.request.Request | str) -> WrappedResponse:
         """ Start an HTTP download """
         if isinstance(req, str):
-            remote_req = RemoteURLRequest(url=req, method="GET")
+            remote_req = RemoteURLRequest(id=str(uuid4()), url=req, method="GET")
         elif isinstance(req, YTDLRequest):
             remote_req = RemoteURLRequest.from_ytdl_request(req)
         else:
