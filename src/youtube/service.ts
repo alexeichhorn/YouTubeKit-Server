@@ -1,6 +1,7 @@
 import { Innertube, ClientType } from 'youtubei.js';
 import { ServerMessage, ServerMessageType, RemoteURLResponse, RemoteURLRequest, RemoteStream } from './models/websocket';
 import { AvailableInnertubeClient } from './models/internal';
+import { fileExtensionFromMimeType } from './file_extension';
 
 export class YouTubeService {
    readonly videoID: string;
@@ -271,7 +272,7 @@ export class YouTubeService {
             return null;
          }
 
-         const mimeType = format.mime_type;
+         let mimeType = format.mime_type;
          let videoCodec: string | undefined = undefined;
          let audioCodec: string | undefined = undefined;
 
@@ -292,12 +293,14 @@ export class YouTubeService {
             } else if (format.has_audio && codecs.length >= 1) {
                audioCodec = codecs[0];
             }
+
+            mimeType = mimeType.split(';')[0]; // remove codec info
          }
 
          const stream: RemoteStream = {
             url: streamUrl,
             itag: format.itag,
-            ext: mimeType?.split('/')[1]?.split(';')[0] || 'unknown',
+            ext: fileExtensionFromMimeType(mimeType),
             video_codec: videoCodec,
             audio_codec: audioCodec,
             average_bitrate: format.bitrate || undefined,
