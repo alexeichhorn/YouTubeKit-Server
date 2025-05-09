@@ -37,6 +37,7 @@ export class YouTubeService {
             allow_redirects: true,
             apply_cookies_on_redirect: true,
             save_intermediate_responses: false,
+            max_message_chunk_size: 900 * 1024, // 900kB (maximum on Cloudflare is 1MB in total)
          };
 
          this.send({ type: ServerMessageType.urlRequest, content: payload });
@@ -246,6 +247,9 @@ export class YouTubeService {
             console.error(`Failed to get streams for client ${client}:`, error);
          }
       }
+
+      // TODO: remove duplicate itags
+      // TODO: parallelize it
 
       return allStreams;
    }

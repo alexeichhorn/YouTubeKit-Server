@@ -7,6 +7,8 @@ export interface RemoteURLRequest {
    allow_redirects: boolean;
    apply_cookies_on_redirect: boolean;
    save_intermediate_responses: boolean;
+
+   max_message_chunk_size?: number;
 }
 
 export interface RemoteURLResponse {
