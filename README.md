@@ -15,7 +15,7 @@ This server enables remote YouTube stream extraction when local extraction fails
 5. Server processes responses and extracts stream URLs
 6. Stream URLs are sent back to client
 
-This architecture ensures streams work with the client's IP address and location, avoiding geo-restrictions.
+This architecture ensures that streams work with the client's IP address and location, avoiding geo-restrictions.
 
 ## Deployment
 
