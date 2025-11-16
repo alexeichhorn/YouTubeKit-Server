@@ -122,7 +122,7 @@ async function evaluateWithWorkerLoader(data: BuildScriptResult, vmEnv: Record<s
             'sandbox.js': { js: moduleSource },
          },
          env: {},
-         globalOutbound: null,
+         globalOutbound: null, // disable outbound requests
       };
    });
 
