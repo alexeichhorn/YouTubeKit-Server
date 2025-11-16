@@ -4,7 +4,7 @@ Remote extraction server for [YouTubeKit](https://github.com/alexeichhorn/YouTub
 
 ## Overview
 
-This server enables remote YouTube stream extraction when local extraction fails. It uses a WebSocket-based architecture where the server orchestrates HTTP requests through the client device, ensuring stream URLs remain playable on the client's network.
+This server enables remote YouTube stream extraction when local extraction fails. It uses a WebSocket-based architecture in which the server orchestrates HTTP requests through the client device, ensuring stream URLs remain playable on the client's network.
 
 ## How It Works
 
