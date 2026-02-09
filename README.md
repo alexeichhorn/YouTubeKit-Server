@@ -21,8 +21,8 @@ This architecture ensures streams work with the client's IP address and location
 
 ### Prerequisites
 
--  [Cloudflare Workers](https://workers.cloudflare.com/) account
--  [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) installed
+- [Cloudflare Workers](https://workers.cloudflare.com/) account
+- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) installed
 
 ### Deploy to Cloudflare Workers
 
@@ -36,3 +36,13 @@ For local development:
 ```bash
 npm run dev
 ```
+
+## Rate Limiting
+
+Requests are limited per app ID (`X-AppID-v1`) using a Durable Object with rolling windows.
+
+Configure limits using environment variables in `wrangler.toml`:
+
+- `RATE_LIMIT_DAILY_REQUESTS`: max requests per app ID in rolling 24h window.
+- `RATE_LIMIT_WEEKLY_REQUESTS`: max requests per app ID in rolling 7d window.
+- `RATE_LIMIT_BUCKET_SECONDS`: bucket size used for rolling-window aggregation (default: `300`).
