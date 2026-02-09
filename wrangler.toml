@@ -14,7 +14,16 @@ enabled = true
 
 # Variables will be loaded from .dev.vars for local development
 [vars]
+RATE_LIMIT_DAILY_REQUESTS = "5000"
+RATE_LIMIT_WEEKLY_REQUESTS = "20000"
 
+[[durable_objects.bindings]]
+name = "APP_RATE_LIMITER"
+class_name = "AppRateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = [ "AppRateLimiter" ]
 
 
 
@@ -22,3 +31,14 @@ enabled = true
 
 [env.production]
 name = "youtubekit-server-production"
+[env.production.vars]
+RATE_LIMIT_DAILY_REQUESTS = "5000"
+RATE_LIMIT_WEEKLY_REQUESTS = "20000"
+
+[[env.production.durable_objects.bindings]]
+name = "APP_RATE_LIMITER"
+class_name = "AppRateLimiter"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = [ "AppRateLimiter" ]
