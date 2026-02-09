@@ -41,23 +41,12 @@ export class AppRateLimiter extends DurableObject<Env> {
       });
    }
 
-   async fetch(request: Request): Promise<Response> {
-      const url = new URL(request.url);
-      if (request.method !== 'POST' || url.pathname !== '/admit') {
-         return new Response('Not found', { status: 404 });
-      }
-
-      const payload = (await request.json().catch(() => null)) as AdmitRequest | null;
-      if (!payload) {
-         return new Response('Invalid JSON payload', { status: 400 });
-      }
-
-      const nowMs = Number.isFinite(payload.nowMs) ? Number(payload.nowMs) : Date.now();
-      const requestedCost = Number.isFinite(payload.cost) ? Number(payload.cost) : 1;
+   admit(payload?: AdmitRequest): RateLimitDecision {
+      const nowMs = Number.isFinite(payload?.nowMs) ? Number(payload?.nowMs) : Date.now();
+      const requestedCost = Number.isFinite(payload?.cost) ? Number(payload?.cost) : 1;
       const cost = Math.max(1, Math.floor(requestedCost));
 
-      const decision = this.admit(cost, nowMs);
-      return Response.json(decision);
+      return this.evaluateAdmission(cost, nowMs);
    }
 
    private initializeSchema() {
@@ -72,7 +61,7 @@ export class AppRateLimiter extends DurableObject<Env> {
       `);
    }
 
-   private admit(cost: number, nowMs: number): RateLimitDecision {
+   private evaluateAdmission(cost: number, nowMs: number): RateLimitDecision {
       const policy = this.getPolicy();
       const state = this.getOrCreateState(nowMs);
       const nextState = this.rollExpiredWindows(state, nowMs);

@@ -73,19 +73,8 @@ function normalizeAppID(rawAppID: string | null): string {
 
 async function checkRateLimit(appID: string, env: Env): Promise<RateLimitDecision> {
    const objectID = env.APP_RATE_LIMITER.idFromName(appID);
-   const stub = env.APP_RATE_LIMITER.get(objectID);
-
-   const response = await stub.fetch('https://limiter/admit', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cost: 1, nowMs: Date.now() }),
-   });
-
-   if (!response.ok) {
-      throw new Error(`Rate limit DO request failed with status ${response.status}`);
-   }
-
-   return (await response.json()) as RateLimitDecision;
+   const rate_limiter = env.APP_RATE_LIMITER.get(objectID);
+   return await rate_limiter.admit({ cost: 1, nowMs: Date.now() });
 }
 
 function buildRateLimitResponse(decision: RateLimitDecision): Response {
