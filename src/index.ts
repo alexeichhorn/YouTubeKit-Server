@@ -35,6 +35,18 @@ export default {
          try {
             const decision = await checkRateLimit(appID, env);
             if (!decision.allowed) {
+               console.warn(
+                  'Rate limit rejected request',
+                  JSON.stringify({
+                     appID,
+                     path: url.pathname,
+                     limitDay: decision.limitDaily,
+                     remainingDay: decision.remainingDaily,
+                     limitWeek: decision.limitWeekly,
+                     remainingWeek: decision.remainingWeekly,
+                     retryAfterSeconds: decision.retryAfterSeconds,
+                  })
+               );
                return buildRateLimitResponse(decision);
             }
          } catch (error) {
