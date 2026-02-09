@@ -16,7 +16,6 @@ enabled = true
 [vars]
 RATE_LIMIT_DAILY_REQUESTS = "5000"
 RATE_LIMIT_WEEKLY_REQUESTS = "20000"
-RATE_LIMIT_BUCKET_SECONDS = "300"
 
 [[durable_objects.bindings]]
 name = "APP_RATE_LIMITER"
@@ -35,7 +34,6 @@ name = "youtubekit-server-production"
 [env.production.vars]
 RATE_LIMIT_DAILY_REQUESTS = "5000"
 RATE_LIMIT_WEEKLY_REQUESTS = "20000"
-RATE_LIMIT_BUCKET_SECONDS = "300"
 
 [[env.production.durable_objects.bindings]]
 name = "APP_RATE_LIMITER"

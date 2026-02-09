@@ -17,14 +17,19 @@ export interface RateLimitDecision {
 interface RateLimitPolicy {
    dailyLimit: number;
    weeklyLimit: number;
-   bucketSizeMs: number;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 const DEFAULT_DAILY_LIMIT = 5000;
 const DEFAULT_WEEKLY_LIMIT = 20000;
-const DEFAULT_BUCKET_SECONDS = 300;
+
+interface CounterState {
+   dayWindowStartMs: number;
+   dayCount: number;
+   weekWindowStartMs: number;
+   weekCount: number;
+}
 
 export class AppRateLimiter extends DurableObject<Env> {
    private readonly sql = this.ctx.storage.sql;
@@ -57,129 +62,147 @@ export class AppRateLimiter extends DurableObject<Env> {
 
    private initializeSchema() {
       this.sql.exec(`
-         CREATE TABLE IF NOT EXISTS request_buckets (
-            bucket_start INTEGER PRIMARY KEY,
-            count INTEGER NOT NULL
+         CREATE TABLE IF NOT EXISTS limiter_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            day_window_start_ms INTEGER NOT NULL,
+            day_count INTEGER NOT NULL,
+            week_window_start_ms INTEGER NOT NULL,
+            week_count INTEGER NOT NULL
          )
       `);
    }
 
    private admit(cost: number, nowMs: number): RateLimitDecision {
       const policy = this.getPolicy();
-      const currentBucketStart = Math.floor(nowMs / policy.bucketSizeMs) * policy.bucketSizeMs;
-      const dayWindowStart = nowMs - DAY_MS;
-      const weekWindowStart = nowMs - WEEK_MS;
+      const state = this.getOrCreateState(nowMs);
+      const nextState = this.rollExpiredWindows(state, nowMs);
 
-      this.cleanupOldBuckets(weekWindowStart, policy.bucketSizeMs);
-
-      const usedDaily = this.getUsageSince(dayWindowStart);
-      const usedWeekly = this.getUsageSince(weekWindowStart);
-      const nextDaily = usedDaily + cost;
-      const nextWeekly = usedWeekly + cost;
+      const nextDaily = nextState.dayCount + cost;
+      const nextWeekly = nextState.weekCount + cost;
 
       if (nextDaily > policy.dailyLimit || nextWeekly > policy.weeklyLimit) {
          const retryAfterSeconds = this.calculateRetryAfterSeconds({
             nowMs,
-            dayWindowStart,
-            weekWindowStart,
+            dayWindowStartMs: nextState.dayWindowStartMs,
+            weekWindowStartMs: nextState.weekWindowStartMs,
             dayExceeded: nextDaily > policy.dailyLimit,
             weekExceeded: nextWeekly > policy.weeklyLimit,
-            bucketSizeMs: policy.bucketSizeMs,
          });
 
          return {
             allowed: false,
             limitDaily: policy.dailyLimit,
             limitWeekly: policy.weeklyLimit,
-            remainingDaily: Math.max(0, policy.dailyLimit - usedDaily),
-            remainingWeekly: Math.max(0, policy.weeklyLimit - usedWeekly),
+            remainingDaily: Math.max(0, policy.dailyLimit - nextState.dayCount),
+            remainingWeekly: Math.max(0, policy.weeklyLimit - nextState.weekCount),
             retryAfterSeconds,
          };
       }
 
       this.sql.exec(
          `
-            INSERT INTO request_buckets (bucket_start, count)
-            VALUES (?1, ?2)
-            ON CONFLICT(bucket_start) DO UPDATE SET count = count + excluded.count
+            INSERT INTO limiter_state (
+               id,
+               day_window_start_ms,
+               day_count,
+               week_window_start_ms,
+               week_count
+            )
+            VALUES (1, ?1, ?2, ?3, ?4)
+            ON CONFLICT(id) DO UPDATE SET
+               day_window_start_ms = excluded.day_window_start_ms,
+               day_count = excluded.day_count,
+               week_window_start_ms = excluded.week_window_start_ms,
+               week_count = excluded.week_count
          `,
-         currentBucketStart,
-         cost
+         nextState.dayWindowStartMs,
+         nextDaily,
+         nextState.weekWindowStartMs,
+         nextWeekly
       );
 
       return {
          allowed: true,
          limitDaily: policy.dailyLimit,
          limitWeekly: policy.weeklyLimit,
-         remainingDaily: Math.max(0, policy.dailyLimit - nextDaily),
-         remainingWeekly: Math.max(0, policy.weeklyLimit - nextWeekly),
+         remainingDaily: Math.max(0, policy.dailyLimit - (nextState.dayCount + cost)),
+         remainingWeekly: Math.max(0, policy.weeklyLimit - (nextState.weekCount + cost)),
          retryAfterSeconds: 0,
       };
    }
 
-   private cleanupOldBuckets(weekWindowStart: number, bucketSizeMs: number) {
-      // Keep one extra bucket outside the 7-day range for stable boundary behavior.
-      this.sql.exec('DELETE FROM request_buckets WHERE bucket_start <= ?1', weekWindowStart - bucketSizeMs);
+   private getOrCreateState(nowMs: number): CounterState {
+      const row = this.sql
+         .exec<{
+            day_window_start_ms: number;
+            day_count: number;
+            week_window_start_ms: number;
+            week_count: number;
+         }>('SELECT day_window_start_ms, day_count, week_window_start_ms, week_count FROM limiter_state WHERE id = 1')
+         .toArray()[0];
+
+      if (!row) {
+         return {
+            dayWindowStartMs: nowMs,
+            dayCount: 0,
+            weekWindowStartMs: nowMs,
+            weekCount: 0,
+         };
+      }
+
+      return {
+         dayWindowStartMs: Number(row.day_window_start_ms),
+         dayCount: Number(row.day_count),
+         weekWindowStartMs: Number(row.week_window_start_ms),
+         weekCount: Number(row.week_count),
+      };
    }
 
-   private getUsageSince(windowStart: number): number {
-      const row = this.sql
-         .exec<{ total: number | null }>('SELECT COALESCE(SUM(count), 0) AS total FROM request_buckets WHERE bucket_start > ?1', windowStart)
-         .one();
+   private rollExpiredWindows(state: CounterState, nowMs: number): CounterState {
+      const nextState = { ...state };
 
-      return Number(row.total ?? 0);
+      if (nowMs >= nextState.dayWindowStartMs + DAY_MS) {
+         nextState.dayWindowStartMs = nowMs;
+         nextState.dayCount = 0;
+      }
+
+      if (nowMs >= nextState.weekWindowStartMs + WEEK_MS) {
+         nextState.weekWindowStartMs = nowMs;
+         nextState.weekCount = 0;
+      }
+
+      return nextState;
    }
 
    private calculateRetryAfterSeconds(params: {
       nowMs: number;
-      dayWindowStart: number;
-      weekWindowStart: number;
+      dayWindowStartMs: number;
+      weekWindowStartMs: number;
       dayExceeded: boolean;
       weekExceeded: boolean;
-      bucketSizeMs: number;
    }): number {
       const retries: number[] = [];
 
       if (params.dayExceeded) {
-         retries.push(this.getWindowRetryAfterSeconds(params.dayWindowStart, DAY_MS, params.nowMs, params.bucketSizeMs));
+         const dayResetAt = params.dayWindowStartMs + DAY_MS;
+         retries.push(Math.max(1, Math.ceil((dayResetAt - params.nowMs) / 1000)));
       }
 
       if (params.weekExceeded) {
-         retries.push(this.getWindowRetryAfterSeconds(params.weekWindowStart, WEEK_MS, params.nowMs, params.bucketSizeMs));
+         const weekResetAt = params.weekWindowStartMs + WEEK_MS;
+         retries.push(Math.max(1, Math.ceil((weekResetAt - params.nowMs) / 1000)));
       }
 
-      if (retries.length === 0) {
-         return Math.max(1, Math.ceil(params.bucketSizeMs / 1000));
-      }
-
-      return Math.max(...retries);
-   }
-
-   private getWindowRetryAfterSeconds(windowStart: number, windowMs: number, nowMs: number, bucketSizeMs: number): number {
-      const row = this.sql
-         .exec<{ bucket_start: number }>(
-            'SELECT bucket_start FROM request_buckets WHERE bucket_start > ?1 ORDER BY bucket_start ASC LIMIT 1',
-            windowStart
-         )
-         .toArray()[0];
-
-      if (!row) {
-         return Math.max(1, Math.ceil(bucketSizeMs / 1000));
-      }
-
-      const retryAt = Number(row.bucket_start) + windowMs;
-      return Math.max(1, Math.ceil((retryAt - nowMs) / 1000));
+      return retries.length > 0 ? Math.max(...retries) : 1;
    }
 
    private getPolicy(): RateLimitPolicy {
       const dailyLimit = this.parsePositiveInt(this.env.RATE_LIMIT_DAILY_REQUESTS, DEFAULT_DAILY_LIMIT);
       const weeklyLimit = this.parsePositiveInt(this.env.RATE_LIMIT_WEEKLY_REQUESTS, DEFAULT_WEEKLY_LIMIT);
-      const bucketSeconds = this.parsePositiveInt(this.env.RATE_LIMIT_BUCKET_SECONDS, DEFAULT_BUCKET_SECONDS);
 
       return {
          dailyLimit,
          weeklyLimit,
-         bucketSizeMs: bucketSeconds * 1000,
       };
    }
 

@@ -39,10 +39,13 @@ npm run dev
 
 ## Rate Limiting
 
-Requests are limited per app ID (`X-AppID-v1`) using a Durable Object with rolling windows.
+Requests are limited per app ID (`X-AppID-v1`) using a Durable Object with anchored windows:
+
+- daily window starts at first request and runs for 24h
+- weekly window starts at first request and runs for 7d
+- when a window expires, the next request starts a new window
 
 Configure limits using environment variables in `wrangler.toml`:
 
-- `RATE_LIMIT_DAILY_REQUESTS`: max requests per app ID in rolling 24h window.
-- `RATE_LIMIT_WEEKLY_REQUESTS`: max requests per app ID in rolling 7d window.
-- `RATE_LIMIT_BUCKET_SECONDS`: bucket size used for rolling-window aggregation (default: `300`).
+- `RATE_LIMIT_DAILY_REQUESTS`: max requests per app ID in each 24h window.
+- `RATE_LIMIT_WEEKLY_REQUESTS`: max requests per app ID in each 7d window.
