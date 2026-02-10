@@ -16,14 +16,26 @@ enabled = true
 [vars]
 RATE_LIMIT_DAILY_REQUESTS = "5000"
 RATE_LIMIT_WEEKLY_REQUESTS = "20000"
+FREE_API_KEY_DAILY_REQUESTS = "10000"
+FREE_API_KEY_WEEKLY_REQUESTS = "40000"
+FREE_API_KEY_MONTHLY_REQUESTS = "160000"
+INTERNAL_USAGE_API_TOKEN = ""
 
 [[durable_objects.bindings]]
 name = "APP_RATE_LIMITER"
 class_name = "AppRateLimiter"
 
+[[durable_objects.bindings]]
+name = "API_KEY_RATE_LIMITER"
+class_name = "ApiKeyRateLimiter"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = [ "AppRateLimiter" ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = [ "ApiKeyRateLimiter" ]
 
 
 
@@ -34,11 +46,23 @@ name = "youtubekit-server-production"
 [env.production.vars]
 RATE_LIMIT_DAILY_REQUESTS = "5000"
 RATE_LIMIT_WEEKLY_REQUESTS = "20000"
+FREE_API_KEY_DAILY_REQUESTS = "10000"
+FREE_API_KEY_WEEKLY_REQUESTS = "40000"
+FREE_API_KEY_MONTHLY_REQUESTS = "160000"
+INTERNAL_USAGE_API_TOKEN = ""
 
 [[env.production.durable_objects.bindings]]
 name = "APP_RATE_LIMITER"
 class_name = "AppRateLimiter"
 
+[[env.production.durable_objects.bindings]]
+name = "API_KEY_RATE_LIMITER"
+class_name = "ApiKeyRateLimiter"
+
 [[env.production.migrations]]
 tag = "v1"
 new_sqlite_classes = [ "AppRateLimiter" ]
+
+[[env.production.migrations]]
+tag = "v2"
+new_sqlite_classes = [ "ApiKeyRateLimiter" ]
