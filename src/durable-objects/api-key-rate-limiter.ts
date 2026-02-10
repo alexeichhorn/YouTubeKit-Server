@@ -9,7 +9,7 @@ interface RateLimitPolicy {
 interface AdmitRequest {
    cost?: number;
    nowMs?: number;
-   keyID?: string;
+   keyID: string;
    projectPolicy?: RateLimitPolicy;
    keyPolicy?: RateLimitPolicy;
 }
@@ -88,33 +88,36 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       });
    }
 
-   admit(payload?: AdmitRequest): ApiKeyRateLimitDecision {
-      const nowMs = Number.isFinite(payload?.nowMs) ? Number(payload?.nowMs) : Date.now();
-      const requestedCost = Number.isFinite(payload?.cost) ? Number(payload?.cost) : 1;
+   admit(payload: AdmitRequest): ApiKeyRateLimitDecision {
+      const nowMs = Number.isFinite(payload.nowMs) ? Number(payload.nowMs) : Date.now();
+      const requestedCost = Number.isFinite(payload.cost) ? Number(payload.cost) : 1;
       const cost = Math.max(1, Math.floor(requestedCost));
 
-      const projectPolicy = this.resolveProjectPolicy(payload?.projectPolicy);
-      const keyPolicy = this.resolveKeyPolicy(payload?.keyPolicy);
+      const projectPolicy = this.resolveProjectPolicy(payload.projectPolicy);
+      const keyPolicy = this.resolveKeyPolicy(payload.keyPolicy);
 
       const projectState = this.getFreshProjectState(nowMs);
-      const keyID = sanitizeKeyID(payload?.keyID);
-      const keyState = keyID ? this.getFreshKeyState(keyID, nowMs) : null;
+      const keyID = sanitizeKeyID(payload.keyID);
+      if (!keyID) {
+         throw new Error('Missing keyID');
+      }
+      const keyState = this.getFreshKeyState(keyID, nowMs);
 
       const nextProjectDaily = projectState.dayCount + cost;
       const nextProjectWeekly = projectState.weekCount + cost;
       const nextProjectMonthly = projectState.monthCount + cost;
 
-      const nextKeyDaily = keyState ? keyState.dayCount + cost : 0;
-      const nextKeyWeekly = keyState ? keyState.weekCount + cost : 0;
-      const nextKeyMonthly = keyState ? keyState.monthCount + cost : 0;
+      const nextKeyDaily = keyState.dayCount + cost;
+      const nextKeyWeekly = keyState.weekCount + cost;
+      const nextKeyMonthly = keyState.monthCount + cost;
 
       const projectDayExceeded = exceeds(nextProjectDaily, projectPolicy.dailyLimit);
       const projectWeekExceeded = exceeds(nextProjectWeekly, projectPolicy.weeklyLimit);
       const projectMonthExceeded = exceeds(nextProjectMonthly, projectPolicy.monthlyLimit);
 
-      const keyDayExceeded = Boolean(keyState && exceeds(nextKeyDaily, keyPolicy.dailyLimit));
-      const keyWeekExceeded = Boolean(keyState && exceeds(nextKeyWeekly, keyPolicy.weeklyLimit));
-      const keyMonthExceeded = Boolean(keyState && exceeds(nextKeyMonthly, keyPolicy.monthlyLimit));
+      const keyDayExceeded = exceeds(nextKeyDaily, keyPolicy.dailyLimit);
+      const keyWeekExceeded = exceeds(nextKeyWeekly, keyPolicy.weeklyLimit);
+      const keyMonthExceeded = exceeds(nextKeyMonthly, keyPolicy.monthlyLimit);
 
       if (
          projectDayExceeded ||
@@ -149,9 +152,9 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
             keyLimitDaily: nullable(keyPolicy.dailyLimit),
             keyLimitWeekly: nullable(keyPolicy.weeklyLimit),
             keyLimitMonthly: nullable(keyPolicy.monthlyLimit),
-            keyRemainingDaily: keyState ? remaining(keyPolicy.dailyLimit, keyState.dayCount) : null,
-            keyRemainingWeekly: keyState ? remaining(keyPolicy.weeklyLimit, keyState.weekCount) : null,
-            keyRemainingMonthly: keyState ? remaining(keyPolicy.monthlyLimit, keyState.monthCount) : null,
+            keyRemainingDaily: remaining(keyPolicy.dailyLimit, keyState.dayCount),
+            keyRemainingWeekly: remaining(keyPolicy.weeklyLimit, keyState.weekCount),
+            keyRemainingMonthly: remaining(keyPolicy.monthlyLimit, keyState.monthCount),
          };
       }
 
@@ -163,14 +166,12 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       };
       this.persistProjectState(nextProjectState);
 
-      if (keyState && keyID) {
-         this.persistKeyState(keyID, {
-            ...keyState,
-            dayCount: nextKeyDaily,
-            weekCount: nextKeyWeekly,
-            monthCount: nextKeyMonthly,
-         });
-      }
+      this.persistKeyState(keyID, {
+         ...keyState,
+         dayCount: nextKeyDaily,
+         weekCount: nextKeyWeekly,
+         monthCount: nextKeyMonthly,
+      });
 
       return {
          allowed: true,
@@ -185,9 +186,9 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
          keyLimitDaily: nullable(keyPolicy.dailyLimit),
          keyLimitWeekly: nullable(keyPolicy.weeklyLimit),
          keyLimitMonthly: nullable(keyPolicy.monthlyLimit),
-         keyRemainingDaily: null,
-         keyRemainingWeekly: null,
-         keyRemainingMonthly: null,
+         keyRemainingDaily: remaining(keyPolicy.dailyLimit, nextKeyDaily),
+         keyRemainingWeekly: remaining(keyPolicy.weeklyLimit, nextKeyWeekly),
+         keyRemainingMonthly: remaining(keyPolicy.monthlyLimit, nextKeyMonthly),
       };
    }
 
