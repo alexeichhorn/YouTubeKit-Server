@@ -29,6 +29,10 @@ API key format (required):
   - Per-key usage counters: day/week/month
 - Scope key: project public ID
 - Default free-tier limits are read inside this DO from Worker env (`FREE_API_KEY_*`).
+- Policy model:
+  - Supports optional project policy and optional key policy inputs.
+  - Enforcement checks project policy first, then key policy.
+  - Current request path only uses free-tier project policy defaults; key-policy limits are effectively unset (`null`).
 
 These limiters are intentionally separate and should not be merged.
 

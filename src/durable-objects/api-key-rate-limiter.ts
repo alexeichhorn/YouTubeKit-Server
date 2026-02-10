@@ -1,14 +1,24 @@
 import { DurableObject } from 'cloudflare:workers';
 
+interface RateLimitPolicy {
+   dailyLimit?: number;
+   weeklyLimit?: number;
+   monthlyLimit?: number;
+}
+
 interface AdmitRequest {
    cost?: number;
    nowMs?: number;
    keyID?: string;
+   projectPolicy?: RateLimitPolicy;
+   keyPolicy?: RateLimitPolicy;
 }
 
 interface UsageRequest {
    nowMs?: number;
    keyID?: string;
+   projectPolicy?: RateLimitPolicy;
+   keyPolicy?: RateLimitPolicy;
 }
 
 interface CounterState {
@@ -20,21 +30,22 @@ interface CounterState {
    monthCount: number;
 }
 
-interface RateLimitPolicy {
-   dailyLimit: number;
-   weeklyLimit: number;
-   monthlyLimit: number;
-}
-
 export interface ApiKeyRateLimitDecision {
    allowed: boolean;
-   limitDaily: number;
-   limitWeekly: number;
-   limitMonthly: number;
-   remainingDaily: number;
-   remainingWeekly: number;
-   remainingMonthly: number;
+   limitDaily: number | null;
+   limitWeekly: number | null;
+   limitMonthly: number | null;
+   remainingDaily: number | null;
+   remainingWeekly: number | null;
+   remainingMonthly: number | null;
    retryAfterSeconds: number;
+   keyID?: string;
+   keyLimitDaily: number | null;
+   keyLimitWeekly: number | null;
+   keyLimitMonthly: number | null;
+   keyRemainingDaily: number | null;
+   keyRemainingWeekly: number | null;
+   keyRemainingMonthly: number | null;
 }
 
 interface UsageCounters {
@@ -44,12 +55,12 @@ interface UsageCounters {
    dayWindowStartMs: number;
    weekWindowStartMs: number;
    monthWindowStartMs: number;
-   limitDaily: number;
-   limitWeekly: number;
-   limitMonthly: number;
-   remainingDaily: number;
-   remainingWeekly: number;
-   remainingMonthly: number;
+   limitDaily: number | null;
+   limitWeekly: number | null;
+   limitMonthly: number | null;
+   remainingDaily: number | null;
+   remainingWeekly: number | null;
+   remainingMonthly: number | null;
 }
 
 export interface ApiKeyUsageSnapshot {
@@ -82,35 +93,65 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       const requestedCost = Number.isFinite(payload?.cost) ? Number(payload?.cost) : 1;
       const cost = Math.max(1, Math.floor(requestedCost));
 
-      const policy = this.getPolicy();
+      const projectPolicy = this.resolveProjectPolicy(payload?.projectPolicy);
+      const keyPolicy = this.resolveKeyPolicy(payload?.keyPolicy);
+
       const projectState = this.getFreshProjectState(nowMs);
+      const keyID = sanitizeKeyID(payload?.keyID);
+      const keyState = keyID ? this.getFreshKeyState(keyID, nowMs) : null;
 
       const nextProjectDaily = projectState.dayCount + cost;
       const nextProjectWeekly = projectState.weekCount + cost;
       const nextProjectMonthly = projectState.monthCount + cost;
 
-      const dayExceeded = nextProjectDaily > policy.dailyLimit;
-      const weekExceeded = nextProjectWeekly > policy.weeklyLimit;
-      const monthExceeded = nextProjectMonthly > policy.monthlyLimit;
+      const nextKeyDaily = keyState ? keyState.dayCount + cost : 0;
+      const nextKeyWeekly = keyState ? keyState.weekCount + cost : 0;
+      const nextKeyMonthly = keyState ? keyState.monthCount + cost : 0;
 
-      if (dayExceeded || weekExceeded || monthExceeded) {
+      const projectDayExceeded = exceeds(nextProjectDaily, projectPolicy.dailyLimit);
+      const projectWeekExceeded = exceeds(nextProjectWeekly, projectPolicy.weeklyLimit);
+      const projectMonthExceeded = exceeds(nextProjectMonthly, projectPolicy.monthlyLimit);
+
+      const keyDayExceeded = Boolean(keyState && exceeds(nextKeyDaily, keyPolicy.dailyLimit));
+      const keyWeekExceeded = Boolean(keyState && exceeds(nextKeyWeekly, keyPolicy.weeklyLimit));
+      const keyMonthExceeded = Boolean(keyState && exceeds(nextKeyMonthly, keyPolicy.monthlyLimit));
+
+      if (
+         projectDayExceeded ||
+         projectWeekExceeded ||
+         projectMonthExceeded ||
+         keyDayExceeded ||
+         keyWeekExceeded ||
+         keyMonthExceeded
+      ) {
+         const retryAfterSeconds = this.calculateRetryAfterSeconds({
+            nowMs,
+            projectState,
+            keyState,
+            projectDayExceeded,
+            projectWeekExceeded,
+            projectMonthExceeded,
+            keyDayExceeded,
+            keyWeekExceeded,
+            keyMonthExceeded,
+         });
+
          return {
             allowed: false,
-            limitDaily: policy.dailyLimit,
-            limitWeekly: policy.weeklyLimit,
-            limitMonthly: policy.monthlyLimit,
-            remainingDaily: Math.max(0, policy.dailyLimit - projectState.dayCount),
-            remainingWeekly: Math.max(0, policy.weeklyLimit - projectState.weekCount),
-            remainingMonthly: Math.max(0, policy.monthlyLimit - projectState.monthCount),
-            retryAfterSeconds: this.calculateRetryAfterSeconds({
-               nowMs,
-               dayWindowStartMs: projectState.dayWindowStartMs,
-               weekWindowStartMs: projectState.weekWindowStartMs,
-               monthWindowStartMs: projectState.monthWindowStartMs,
-               dayExceeded,
-               weekExceeded,
-               monthExceeded,
-            }),
+            limitDaily: nullable(projectPolicy.dailyLimit),
+            limitWeekly: nullable(projectPolicy.weeklyLimit),
+            limitMonthly: nullable(projectPolicy.monthlyLimit),
+            remainingDaily: remaining(projectPolicy.dailyLimit, projectState.dayCount),
+            remainingWeekly: remaining(projectPolicy.weeklyLimit, projectState.weekCount),
+            remainingMonthly: remaining(projectPolicy.monthlyLimit, projectState.monthCount),
+            retryAfterSeconds,
+            keyID,
+            keyLimitDaily: nullable(keyPolicy.dailyLimit),
+            keyLimitWeekly: nullable(keyPolicy.weeklyLimit),
+            keyLimitMonthly: nullable(keyPolicy.monthlyLimit),
+            keyRemainingDaily: keyState ? remaining(keyPolicy.dailyLimit, keyState.dayCount) : null,
+            keyRemainingWeekly: keyState ? remaining(keyPolicy.weeklyLimit, keyState.weekCount) : null,
+            keyRemainingMonthly: keyState ? remaining(keyPolicy.monthlyLimit, keyState.monthCount) : null,
          };
       }
 
@@ -122,36 +163,42 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       };
       this.persistProjectState(nextProjectState);
 
-      const keyID = sanitizeKeyID(payload?.keyID);
-      if (keyID) {
-         const keyState = this.getFreshKeyState(keyID, nowMs);
+      if (keyState && keyID) {
          this.persistKeyState(keyID, {
             ...keyState,
-            dayCount: keyState.dayCount + cost,
-            weekCount: keyState.weekCount + cost,
-            monthCount: keyState.monthCount + cost,
+            dayCount: nextKeyDaily,
+            weekCount: nextKeyWeekly,
+            monthCount: nextKeyMonthly,
          });
       }
 
       return {
          allowed: true,
-         limitDaily: policy.dailyLimit,
-         limitWeekly: policy.weeklyLimit,
-         limitMonthly: policy.monthlyLimit,
-         remainingDaily: Math.max(0, policy.dailyLimit - nextProjectState.dayCount),
-         remainingWeekly: Math.max(0, policy.weeklyLimit - nextProjectState.weekCount),
-         remainingMonthly: Math.max(0, policy.monthlyLimit - nextProjectState.monthCount),
+         limitDaily: nullable(projectPolicy.dailyLimit),
+         limitWeekly: nullable(projectPolicy.weeklyLimit),
+         limitMonthly: nullable(projectPolicy.monthlyLimit),
+         remainingDaily: remaining(projectPolicy.dailyLimit, nextProjectState.dayCount),
+         remainingWeekly: remaining(projectPolicy.weeklyLimit, nextProjectState.weekCount),
+         remainingMonthly: remaining(projectPolicy.monthlyLimit, nextProjectState.monthCount),
          retryAfterSeconds: 0,
+         keyID,
+         keyLimitDaily: nullable(keyPolicy.dailyLimit),
+         keyLimitWeekly: nullable(keyPolicy.weeklyLimit),
+         keyLimitMonthly: nullable(keyPolicy.monthlyLimit),
+         keyRemainingDaily: null,
+         keyRemainingWeekly: null,
+         keyRemainingMonthly: null,
       };
    }
 
    usage(payload?: UsageRequest): ApiKeyUsageSnapshot {
       const nowMs = Number.isFinite(payload?.nowMs) ? Number(payload?.nowMs) : Date.now();
-      const policy = this.getPolicy();
-      const projectState = this.getFreshProjectState(nowMs);
+      const projectPolicy = this.resolveProjectPolicy(payload?.projectPolicy);
+      const keyPolicy = this.resolveKeyPolicy(payload?.keyPolicy);
 
+      const projectState = this.getFreshProjectState(nowMs);
       const snapshot: ApiKeyUsageSnapshot = {
-         project: this.toUsageCounters(projectState, policy),
+         project: toUsageCounters(projectState, projectPolicy),
       };
 
       const keyID = sanitizeKeyID(payload?.keyID);
@@ -159,7 +206,7 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
          const keyState = this.getFreshKeyState(keyID, nowMs);
          snapshot.key = {
             keyID,
-            counters: this.toUsageCounters(keyState, policy),
+            counters: toUsageCounters(keyState, keyPolicy),
          };
       }
 
@@ -363,65 +410,36 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       return nextState;
    }
 
-   private getPolicy(): RateLimitPolicy {
+   private resolveProjectPolicy(override?: RateLimitPolicy): RateLimitPolicy {
+      const defaults: RateLimitPolicy = {
+         dailyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_DAILY_REQUESTS) ?? DEFAULT_DAILY_LIMIT,
+         weeklyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_WEEKLY_REQUESTS) ?? DEFAULT_WEEKLY_LIMIT,
+         monthlyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_MONTHLY_REQUESTS) ?? DEFAULT_MONTHLY_LIMIT,
+      };
+
       return {
-         dailyLimit: this.parsePositiveInt(this.env.FREE_API_KEY_DAILY_REQUESTS, DEFAULT_DAILY_LIMIT),
-         weeklyLimit: this.parsePositiveInt(this.env.FREE_API_KEY_WEEKLY_REQUESTS, DEFAULT_WEEKLY_LIMIT),
-         monthlyLimit: this.parsePositiveInt(this.env.FREE_API_KEY_MONTHLY_REQUESTS, DEFAULT_MONTHLY_LIMIT),
+         dailyLimit: override?.dailyLimit ?? defaults.dailyLimit,
+         weeklyLimit: override?.weeklyLimit ?? defaults.weeklyLimit,
+         monthlyLimit: override?.monthlyLimit ?? defaults.monthlyLimit,
       };
    }
 
-   private toUsageCounters(state: CounterState, policy: RateLimitPolicy): UsageCounters {
+   private resolveKeyPolicy(override?: RateLimitPolicy): RateLimitPolicy {
       return {
-         dayCount: state.dayCount,
-         weekCount: state.weekCount,
-         monthCount: state.monthCount,
-         dayWindowStartMs: state.dayWindowStartMs,
-         weekWindowStartMs: state.weekWindowStartMs,
-         monthWindowStartMs: state.monthWindowStartMs,
-         limitDaily: policy.dailyLimit,
-         limitWeekly: policy.weeklyLimit,
-         limitMonthly: policy.monthlyLimit,
-         remainingDaily: Math.max(0, policy.dailyLimit - state.dayCount),
-         remainingWeekly: Math.max(0, policy.weeklyLimit - state.weekCount),
-         remainingMonthly: Math.max(0, policy.monthlyLimit - state.monthCount),
+         dailyLimit: this.parseOptionalPositiveInt(override?.dailyLimit),
+         weeklyLimit: this.parseOptionalPositiveInt(override?.weeklyLimit),
+         monthlyLimit: this.parseOptionalPositiveInt(override?.monthlyLimit),
       };
    }
 
-   private calculateRetryAfterSeconds(params: {
-      nowMs: number;
-      dayWindowStartMs: number;
-      weekWindowStartMs: number;
-      monthWindowStartMs: number;
-      dayExceeded: boolean;
-      weekExceeded: boolean;
-      monthExceeded: boolean;
-   }): number {
-      const retries: number[] = [];
-
-      if (params.dayExceeded) {
-         retries.push(Math.max(1, Math.ceil((params.dayWindowStartMs + DAY_MS - params.nowMs) / 1000)));
-      }
-
-      if (params.weekExceeded) {
-         retries.push(Math.max(1, Math.ceil((params.weekWindowStartMs + WEEK_MS - params.nowMs) / 1000)));
-      }
-
-      if (params.monthExceeded) {
-         retries.push(Math.max(1, Math.ceil((params.monthWindowStartMs + MONTH_MS - params.nowMs) / 1000)));
-      }
-
-      return retries.length > 0 ? Math.max(...retries) : 1;
-   }
-
-   private parsePositiveInt(value: string | number | undefined, fallback: number): number {
-      if (value === undefined) {
-         return fallback;
+   private parseOptionalPositiveInt(value: string | number | undefined): number | undefined {
+      if (value === undefined || value === null || value === '') {
+         return undefined;
       }
 
       const parsed = Number.parseInt(String(value), 10);
       if (!Number.isFinite(parsed) || parsed <= 0) {
-         return fallback;
+         return undefined;
       }
 
       return parsed;
@@ -437,6 +455,46 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
          a.monthCount === b.monthCount
       );
    }
+
+   private calculateRetryAfterSeconds(params: {
+      nowMs: number;
+      projectState: CounterState;
+      keyState: CounterState | null;
+      projectDayExceeded: boolean;
+      projectWeekExceeded: boolean;
+      projectMonthExceeded: boolean;
+      keyDayExceeded: boolean;
+      keyWeekExceeded: boolean;
+      keyMonthExceeded: boolean;
+   }): number {
+      const retries: number[] = [];
+
+      if (params.projectDayExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.projectState.dayWindowStartMs + DAY_MS - params.nowMs) / 1000)));
+      }
+
+      if (params.projectWeekExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.projectState.weekWindowStartMs + WEEK_MS - params.nowMs) / 1000)));
+      }
+
+      if (params.projectMonthExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.projectState.monthWindowStartMs + MONTH_MS - params.nowMs) / 1000)));
+      }
+
+      if (params.keyState && params.keyDayExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.keyState.dayWindowStartMs + DAY_MS - params.nowMs) / 1000)));
+      }
+
+      if (params.keyState && params.keyWeekExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.keyState.weekWindowStartMs + WEEK_MS - params.nowMs) / 1000)));
+      }
+
+      if (params.keyState && params.keyMonthExceeded) {
+         retries.push(Math.max(1, Math.ceil((params.keyState.monthWindowStartMs + MONTH_MS - params.nowMs) / 1000)));
+      }
+
+      return retries.length > 0 ? Math.max(...retries) : 1;
+   }
 }
 
 function sanitizeKeyID(raw: string | undefined): string | undefined {
@@ -446,4 +504,37 @@ function sanitizeKeyID(raw: string | undefined): string | undefined {
    }
 
    return trimmed.slice(0, 128);
+}
+
+function exceeds(count: number, limit: number | undefined): boolean {
+   return limit !== undefined && count > limit;
+}
+
+function remaining(limit: number | undefined, count: number): number | null {
+   if (limit === undefined) {
+      return null;
+   }
+
+   return Math.max(0, limit - count);
+}
+
+function nullable(value: number | undefined): number | null {
+   return value === undefined ? null : value;
+}
+
+function toUsageCounters(state: CounterState, policy: RateLimitPolicy): UsageCounters {
+   return {
+      dayCount: state.dayCount,
+      weekCount: state.weekCount,
+      monthCount: state.monthCount,
+      dayWindowStartMs: state.dayWindowStartMs,
+      weekWindowStartMs: state.weekWindowStartMs,
+      monthWindowStartMs: state.monthWindowStartMs,
+      limitDaily: nullable(policy.dailyLimit),
+      limitWeekly: nullable(policy.weeklyLimit),
+      limitMonthly: nullable(policy.monthlyLimit),
+      remainingDaily: remaining(policy.dailyLimit, state.dayCount),
+      remainingWeekly: remaining(policy.weeklyLimit, state.weekCount),
+      remainingMonthly: remaining(policy.monthlyLimit, state.monthCount),
+   };
 }

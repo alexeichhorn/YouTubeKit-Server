@@ -21,12 +21,12 @@ interface ParsedApiKey {
 interface EffectiveDecision {
    tier: RateTier;
    allowed: boolean;
-   limitDaily: number;
-   limitWeekly: number;
-   limitMonthly?: number;
-   remainingDaily: number;
-   remainingWeekly: number;
-   remainingMonthly?: number;
+   limitDaily: number | null;
+   limitWeekly: number | null;
+   limitMonthly: number | null;
+   remainingDaily: number | null;
+   remainingWeekly: number | null;
+   remainingMonthly: number | null;
    retryAfterSeconds: number;
 }
 
@@ -71,8 +71,8 @@ export default {
                      remainingDay: decision.remainingDaily,
                      limitWeek: decision.limitWeekly,
                      remainingWeek: decision.remainingWeekly,
-                     limitMonth: decision.limitMonthly ?? null,
-                     remainingMonth: decision.remainingMonthly ?? null,
+                     limitMonth: decision.limitMonthly,
+                     remainingMonth: decision.remainingMonthly,
                      keyID: parsedKey?.keyID ?? null,
                   })
                );
@@ -109,7 +109,14 @@ async function checkAppRateLimit(appID: string, env: Env): Promise<EffectiveDeci
 
    return {
       tier: 'public_no_key',
-      ...decision,
+      allowed: decision.allowed,
+      limitDaily: decision.limitDaily,
+      limitWeekly: decision.limitWeekly,
+      limitMonthly: null,
+      remainingDaily: decision.remainingDaily,
+      remainingWeekly: decision.remainingWeekly,
+      remainingMonthly: null,
+      retryAfterSeconds: decision.retryAfterSeconds,
    };
 }
 
@@ -133,13 +140,19 @@ function buildRateLimitResponse(decision: EffectiveDecision): Response {
    const headers: Record<string, string> = {
       'Retry-After': decision.retryAfterSeconds.toString(),
       'X-RateLimit-Tier': decision.tier,
-      'X-RateLimit-Limit-Day': decision.limitDaily.toString(),
-      'X-RateLimit-Limit-Week': decision.limitWeekly.toString(),
-      'X-RateLimit-Remaining-Day': decision.remainingDaily.toString(),
-      'X-RateLimit-Remaining-Week': decision.remainingWeekly.toString(),
    };
 
-   if (decision.limitMonthly !== undefined && decision.remainingMonthly !== undefined) {
+   if (decision.limitDaily != null && decision.remainingDaily != null) {
+      headers['X-RateLimit-Limit-Day'] = decision.limitDaily.toString();
+      headers['X-RateLimit-Remaining-Day'] = decision.remainingDaily.toString();
+   }
+
+   if (decision.limitWeekly != null && decision.remainingWeekly != null) {
+      headers['X-RateLimit-Limit-Week'] = decision.limitWeekly.toString();
+      headers['X-RateLimit-Remaining-Week'] = decision.remainingWeekly.toString();
+   }
+
+   if (decision.limitMonthly != null && decision.remainingMonthly != null) {
       headers['X-RateLimit-Limit-Month'] = decision.limitMonthly.toString();
       headers['X-RateLimit-Remaining-Month'] = decision.remainingMonthly.toString();
    }
