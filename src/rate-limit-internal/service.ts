@@ -1,9 +1,51 @@
 import type { SyncProjectConfigRequest } from '../durable-objects/api-key-rate-limiter';
 import type { ParsedApiKey } from '../rate-limit-admission/models';
 import type { ParsedProjectConfigPayload } from './models';
+import { z } from 'zod';
 
 const INTERNAL_USAGE_TOKEN_HEADER = 'X-Internal-Usage-Token';
 const INTERNAL_CONFIG_TOKEN_HEADER = 'X-Internal-Config-Token';
+
+const NORMALIZED_API_KEY_SCHEMA = z.string().trim().min(1);
+const API_KEY_PATTERN = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/;
+const PARSED_API_KEY_SCHEMA = z.string().trim().regex(API_KEY_PATTERN);
+
+const RATE_LIMIT_POLICY_SCHEMA = z
+   .object({
+      dailyLimit: z.number().finite().nullable().optional(),
+      weeklyLimit: z.number().finite().nullable().optional(),
+      monthlyLimit: z.number().finite().nullable().optional(),
+   })
+   .strict();
+
+const PROJECT_CONFIG_PAYLOAD_SCHEMA = z
+   .object({
+      projectID: z.string().trim().min(1),
+      version: z.number().int(),
+      projectPolicy: RATE_LIMIT_POLICY_SCHEMA.nullish().transform((value) => value ?? {}),
+      keys: z.array(
+         z
+            .object({
+               keyID: z.string().min(1),
+               secretHash: z.string().min(1),
+               status: z.enum(['active', 'revoked']),
+               keyPolicy: RATE_LIMIT_POLICY_SCHEMA.nullish().transform((value) => value ?? {}),
+            })
+            .strict(),
+      ),
+   })
+   .strict()
+   .transform((value): ParsedProjectConfigPayload => {
+      const config: SyncProjectConfigRequest = {
+         version: value.version,
+         projectPolicy: value.projectPolicy,
+         keys: value.keys,
+      };
+      return {
+         projectID: value.projectID,
+         config,
+      };
+   });
 
 export class RateLimitInternalService {
    constructor(private readonly env: Env) {}
@@ -117,130 +159,22 @@ export class RateLimitInternalService {
    }
 
    private parseProjectConfigPayload(payload: unknown): ParsedProjectConfigPayload | null {
-      if (!payload || typeof payload !== 'object') {
-         return null;
-      }
-
-      const raw = payload as Record<string, unknown>;
-      const projectID = typeof raw.projectID === 'string' ? raw.projectID.trim() : '';
-      if (!projectID) {
-         return null;
-      }
-
-      const version = Number(raw.version);
-      if (!Number.isInteger(version)) {
-         return null;
-      }
-
-      const keysRaw = raw.keys;
-      if (!Array.isArray(keysRaw)) {
-         return null;
-      }
-
-      const keys = keysRaw.map((entry): SyncProjectConfigRequest['keys'][number] | null => {
-         if (!entry || typeof entry !== 'object') {
-            return null;
-         }
-         const key = entry as Record<string, unknown>;
-
-         const keyID = typeof key.keyID === 'string' ? key.keyID : null;
-         const secretHash = typeof key.secretHash === 'string' ? key.secretHash : null;
-         const status = this.parseKeyStatus(key.status);
-         const keyPolicy = this.parseNullablePolicyObject(key.keyPolicy);
-
-         if (!keyID || !secretHash || !status || keyPolicy === undefined) {
-            return null;
-         }
-
-         return {
-            keyID,
-            secretHash,
-            status,
-            keyPolicy,
-         };
-      });
-
-      if (keys.some((key) => key === null)) {
-         return null;
-      }
-
-      const projectPolicy = this.parseNullablePolicyObject(raw.projectPolicy);
-      if (projectPolicy === undefined) {
-         return null;
-      }
-
-      return {
-         projectID,
-         config: {
-            version,
-            projectPolicy,
-            keys: keys as SyncProjectConfigRequest['keys'],
-         },
-      };
-   }
-
-   private parseKeyStatus(value: unknown): 'active' | 'revoked' | null {
-      if (value === 'active' || value === 'revoked') {
-         return value;
-      }
-
-      return null;
-   }
-
-   private parseNullablePolicyObject(value: unknown):
-      | {
-           dailyLimit?: number | null;
-           weeklyLimit?: number | null;
-           monthlyLimit?: number | null;
-        }
-      | undefined {
-      if (value === undefined || value === null) {
-         return {};
-      }
-      if (typeof value !== 'object') {
-         return undefined;
-      }
-
-      const raw = value as Record<string, unknown>;
-
-      const dailyLimit = this.parseNullableLimit(raw.dailyLimit);
-      const weeklyLimit = this.parseNullableLimit(raw.weeklyLimit);
-      const monthlyLimit = this.parseNullableLimit(raw.monthlyLimit);
-      if (dailyLimit === undefined || weeklyLimit === undefined || monthlyLimit === undefined) {
-         return undefined;
-      }
-
-      return {
-         dailyLimit,
-         weeklyLimit,
-         monthlyLimit,
-      };
-   }
-
-   private parseNullableLimit(value: unknown): number | null | undefined {
-      if (value === undefined || value === null) {
-         return null;
-      }
-
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) {
-         return undefined;
-      }
-
-      return parsed;
+      const result = PROJECT_CONFIG_PAYLOAD_SCHEMA.safeParse(payload);
+      return result.success ? result.data : null;
    }
 
    private parseApiKey(raw: string): ParsedApiKey | null {
-      const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
+      const result = PARSED_API_KEY_SCHEMA.safeParse(raw);
+      if (!result.success) {
+         return null;
+      }
+
+      const match = API_KEY_PATTERN.exec(result.data);
       if (!match) {
          return null;
       }
 
       const [, projectPublicID, keyID, keySecret] = match;
-      if (!projectPublicID || !keyID || !keySecret) {
-         return null;
-      }
-
       return {
          projectPublicID,
          keyID,
@@ -249,12 +183,12 @@ export class RateLimitInternalService {
    }
 
    private normalizeApiKey(value: string | null): string | null {
-      const trimmed = value?.trim();
-      if (!trimmed) {
+      const result = NORMALIZED_API_KEY_SCHEMA.safeParse(value);
+      if (!result.success) {
          return null;
       }
 
-      return trimmed;
+      return result.data;
    }
 
    private json(value: unknown): Response {

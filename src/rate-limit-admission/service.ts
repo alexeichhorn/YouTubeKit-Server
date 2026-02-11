@@ -1,4 +1,9 @@
 import type { EffectiveDecision, ParsedApiKey, RateLimitCheckResult } from './models';
+import { z } from 'zod';
+
+const NORMALIZED_API_KEY_SCHEMA = z.string().trim().min(1);
+const API_KEY_PATTERN = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/;
+const PARSED_API_KEY_SCHEMA = z.string().trim().regex(API_KEY_PATTERN);
 
 export class RateLimitAdmissionService {
    constructor(private readonly env: Env) {}
@@ -87,16 +92,17 @@ export class RateLimitAdmissionService {
    }
 
    private parseApiKey(raw: string): ParsedApiKey | null {
-      const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
+      const result = PARSED_API_KEY_SCHEMA.safeParse(raw);
+      if (!result.success) {
+         return null;
+      }
+
+      const match = API_KEY_PATTERN.exec(result.data);
       if (!match) {
          return null;
       }
 
       const [, projectPublicID, keyID, keySecret] = match;
-      if (!projectPublicID || !keyID || !keySecret) {
-         return null;
-      }
-
       return {
          projectPublicID,
          keyID,
@@ -105,11 +111,11 @@ export class RateLimitAdmissionService {
    }
 
    private normalizeApiKey(value: string | null): string | null {
-      const trimmed = value?.trim();
-      if (!trimmed) {
+      const result = NORMALIZED_API_KEY_SCHEMA.safeParse(value);
+      if (!result.success) {
          return null;
       }
 
-      return trimmed;
+      return result.data;
    }
 }
