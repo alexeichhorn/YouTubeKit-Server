@@ -1,8 +1,6 @@
 import {
-   ApiKeyPattern,
    NormalizedApiKeySchema,
-   ParsedApiKeySchema,
-   RawApiKeySchema,
+   ParsedApiKeyFromRawSchema,
    type ParsedApiKey,
 } from '../rate-limit-admission/models';
 import {
@@ -130,24 +128,8 @@ export class RateLimitInternalService {
    }
 
    private parseApiKey(raw: string): ParsedApiKey | null {
-      const result = RawApiKeySchema.safeParse(raw);
-      if (!result.success) {
-         return null;
-      }
-
-      const match = ApiKeyPattern.exec(result.data);
-      if (!match) {
-         return null;
-      }
-
-      const [, projectPublicID, keyID, keySecret] = match;
-      const parsedApiKeyResult = ParsedApiKeySchema.safeParse({
-         projectPublicID,
-         keyID,
-         keySecret,
-      });
-
-      return parsedApiKeyResult.success ? parsedApiKeyResult.data : null;
+      const result = ParsedApiKeyFromRawSchema.safeParse(raw);
+      return result.success ? result.data : null;
    }
 
    private normalizeApiKey(value: string | null): string | null {

@@ -1,5 +1,5 @@
 import type { EffectiveDecision, ParsedApiKey, RateLimitCheckResult } from './models';
-import { ApiKeyPattern, NormalizedApiKeySchema, ParsedApiKeySchema, RawApiKeySchema } from './models';
+import { NormalizedApiKeySchema, ParsedApiKeyFromRawSchema } from './models';
 
 export class RateLimitAdmissionService {
    constructor(private readonly env: Env) {}
@@ -88,24 +88,8 @@ export class RateLimitAdmissionService {
    }
 
    private parseApiKey(raw: string): ParsedApiKey | null {
-      const result = RawApiKeySchema.safeParse(raw);
-      if (!result.success) {
-         return null;
-      }
-
-      const match = ApiKeyPattern.exec(result.data);
-      if (!match) {
-         return null;
-      }
-
-      const [, projectPublicID, keyID, keySecret] = match;
-      const parsedApiKeyResult = ParsedApiKeySchema.safeParse({
-         projectPublicID,
-         keyID,
-         keySecret,
-      });
-
-      return parsedApiKeyResult.success ? parsedApiKeyResult.data : null;
+      const result = ParsedApiKeyFromRawSchema.safeParse(raw);
+      return result.success ? result.data : null;
    }
 
    private normalizeApiKey(value: string | null): string | null {

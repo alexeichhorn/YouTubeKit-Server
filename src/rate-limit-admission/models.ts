@@ -16,6 +16,20 @@ export const ParsedApiKeySchema = z
 
 export type ParsedApiKey = z.infer<typeof ParsedApiKeySchema>;
 
+export const ParsedApiKeyFromRawSchema = RawApiKeySchema.transform((value) => {
+   const match = ApiKeyPattern.exec(value);
+   if (!match) {
+      throw new Error('Invalid API key format');
+   }
+
+   const [, projectPublicID, keyID, keySecret] = match;
+   return {
+      projectPublicID,
+      keyID,
+      keySecret,
+   };
+}).pipe(ParsedApiKeySchema);
+
 export interface EffectiveDecision {
    tier: RateTier;
    allowed: boolean;
