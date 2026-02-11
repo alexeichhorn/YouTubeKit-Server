@@ -1,6 +1,6 @@
 import { YouTubeService } from './youtube/service';
 import { AppRateLimiter } from './durable-objects/app-rate-limiter';
-import { ApiKeyRateLimiter } from './durable-objects/api-key-rate-limiter';
+import { ApiKeyRateLimiter, type SyncProjectConfigRequest } from './durable-objects/api-key-rate-limiter';
 
 export { AppRateLimiter };
 export { ApiKeyRateLimiter };
@@ -8,6 +8,7 @@ export { ApiKeyRateLimiter };
 const APP_ID_HEADER = 'X-AppID-v1';
 const API_KEY_HEADER = 'X-API-Key';
 const INTERNAL_USAGE_TOKEN_HEADER = 'X-Internal-Usage-Token';
+const INTERNAL_CONFIG_TOKEN_HEADER = 'X-Internal-Config-Token';
 
 const APP_ID_MAX_LENGTH = 128;
 
@@ -22,6 +23,7 @@ interface ParsedApiKey {
 interface EffectiveDecision {
    tier: RateTier;
    allowed: boolean;
+   deniedReason?: 'invalid_key' | 'rate_limited';
    limitDaily: number | null;
    limitWeekly: number | null;
    limitMonthly: number | null;
@@ -39,6 +41,9 @@ export default {
 
       if (url.pathname === '/internal/usage' && request.method === 'GET') {
          return handleUsageRequest(request, url, env);
+      }
+      if (url.pathname === '/internal/project-config' && request.method === 'PUT') {
+         return handleProjectConfigRequest(request, env);
       }
 
       // Log the App ID header for debugging purposes
@@ -62,6 +67,18 @@ export default {
             const decision = parsedKey ? await checkApiKeyRateLimit(parsedKey, env) : await checkAppRateLimit(appID, env);
 
             if (!decision.allowed) {
+               if (decision.deniedReason === 'invalid_key') {
+                  console.warn(
+                     'API key rejected request',
+                     JSON.stringify({
+                        appID,
+                        path: url.pathname,
+                        keyID: parsedKey?.keyID ?? null,
+                     })
+                  );
+                  return new Response('Invalid API key', { status: 401 });
+               }
+
                console.warn(
                   'Rate limit rejected request',
                   JSON.stringify({
@@ -221,6 +238,38 @@ async function handleUsageRequest(request: Request, url: URL, env: Env): Promise
    return new Response('Invalid kind. Use kind=project or kind=key', { status: 400 });
 }
 
+async function handleProjectConfigRequest(request: Request, env: Env): Promise<Response> {
+   if (!isConfigRequestAuthorized(request, env)) {
+      return new Response('Forbidden', { status: 403 });
+   }
+
+   let payload: unknown;
+   try {
+      payload = await request.json();
+   } catch {
+      return new Response('Invalid JSON body', { status: 400 });
+   }
+
+   const parsed = parseProjectConfigPayload(payload);
+   if (!parsed) {
+      return new Response('Invalid project config payload', { status: 400 });
+   }
+
+   try {
+      const objectID = env.API_KEY_RATE_LIMITER.idFromName(parsed.projectID);
+      const limiter = env.API_KEY_RATE_LIMITER.get(objectID);
+      const result = await limiter.syncProjectConfig(parsed.config);
+
+      return json({
+         projectID: parsed.projectID,
+         ...result,
+      });
+   } catch (error) {
+      console.error('Failed to sync project config:', error);
+      return new Response('Failed to sync project config', { status: 400 });
+   }
+}
+
 function parseApiKey(raw: string): ParsedApiKey | null {
    const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
    if (!match) {
@@ -249,6 +298,16 @@ function isUsageRequestAuthorized(request: Request, env: Env): boolean {
    return Boolean(providedToken && providedToken === configuredToken);
 }
 
+function isConfigRequestAuthorized(request: Request, env: Env): boolean {
+   const configuredToken = env.INTERNAL_CONFIG_API_TOKEN?.trim();
+   if (!configuredToken) {
+      return false;
+   }
+
+   const providedToken = request.headers.get(INTERNAL_CONFIG_TOKEN_HEADER)?.trim();
+   return Boolean(providedToken && providedToken === configuredToken);
+}
+
 function normalizeAppID(rawAppID: string | null): string | null {
    const trimmed = rawAppID?.trim();
    if (!trimmed) {
@@ -265,6 +324,125 @@ function normalizeApiKey(value: string | null): string | null {
    }
 
    return trimmed;
+}
+
+function parseProjectConfigPayload(
+   payload: unknown,
+): { projectID: string; config: SyncProjectConfigRequest } | null {
+   if (!payload || typeof payload !== 'object') {
+      return null;
+   }
+
+   const raw = payload as Record<string, unknown>;
+   const projectID = typeof raw.projectID === 'string' ? raw.projectID.trim() : '';
+   if (!projectID) {
+      return null;
+   }
+
+   const version = Number(raw.version);
+   if (!Number.isInteger(version)) {
+      return null;
+   }
+
+   const keysRaw = raw.keys;
+   if (!Array.isArray(keysRaw)) {
+      return null;
+   }
+
+   const keys = keysRaw.map((entry): SyncProjectConfigRequest['keys'][number] | null => {
+      if (!entry || typeof entry !== 'object') {
+         return null;
+      }
+      const key = entry as Record<string, unknown>;
+
+      const keyID = typeof key.keyID === 'string' ? key.keyID : null;
+      const secretHash = typeof key.secretHash === 'string' ? key.secretHash : null;
+      const status = parseKeyStatus(key.status);
+      const keyPolicy = parseNullablePolicyObject(key.keyPolicy);
+
+      if (!keyID || !secretHash || !status || keyPolicy === undefined) {
+         return null;
+      }
+
+      return {
+         keyID,
+         secretHash,
+         status,
+         keyPolicy,
+      };
+   });
+
+   if (keys.some((key) => key === null)) {
+      return null;
+   }
+
+   const projectPolicy = parseNullablePolicyObject(raw.projectPolicy);
+   if (projectPolicy === undefined) {
+      return null;
+   }
+
+   return {
+      projectID,
+      config: {
+         version,
+         projectPolicy,
+         keys: keys as SyncProjectConfigRequest['keys'],
+      },
+   };
+}
+
+function parseKeyStatus(value: unknown): 'active' | 'revoked' | null {
+   if (value === 'active' || value === 'revoked') {
+      return value;
+   }
+
+   return null;
+}
+
+function parseNullablePolicyObject(value: unknown):
+   | {
+        dailyLimit?: number | null;
+        weeklyLimit?: number | null;
+        monthlyLimit?: number | null;
+     }
+   | undefined {
+   if (value === undefined || value === null) {
+      return {};
+   }
+   if (typeof value !== 'object') {
+      return undefined;
+   }
+
+   const raw = value as Record<string, unknown>;
+
+   const dailyLimit = parseNullableLimit(raw.dailyLimit);
+   const weeklyLimit = parseNullableLimit(raw.weeklyLimit);
+   const monthlyLimit = parseNullableLimit(raw.monthlyLimit);
+   if (dailyLimit === undefined || weeklyLimit === undefined || monthlyLimit === undefined) {
+      return undefined;
+   }
+
+   return {
+      dailyLimit,
+      weeklyLimit,
+      monthlyLimit,
+   };
+}
+
+function parseNullableLimit(value: unknown): number | null | undefined {
+   if (value === undefined) {
+      return null;
+   }
+   if (value === null) {
+      return null;
+   }
+
+   const parsed = Number(value);
+   if (!Number.isFinite(parsed)) {
+      return undefined;
+   }
+
+   return parsed;
 }
 
 function json(value: unknown): Response {

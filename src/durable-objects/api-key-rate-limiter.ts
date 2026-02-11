@@ -6,20 +6,42 @@ interface RateLimitPolicy {
    monthlyLimit?: number;
 }
 
+interface NullableRateLimitPolicy {
+   dailyLimit?: number | null;
+   weeklyLimit?: number | null;
+   monthlyLimit?: number | null;
+}
+
+interface SyncKeyConfigRequest {
+   keyID: string;
+   secretHash: string;
+   status: 'active' | 'revoked';
+   keyPolicy?: NullableRateLimitPolicy;
+}
+
+export interface SyncProjectConfigRequest {
+   version: number;
+   projectPolicy?: NullableRateLimitPolicy;
+   keys: SyncKeyConfigRequest[];
+}
+
+export interface SyncProjectConfigResponse {
+   ok: true;
+   applied: boolean;
+   version: number;
+   currentVersion?: number;
+}
+
 interface AdmitRequest {
    cost?: number;
    nowMs?: number;
    keyID: string;
    keySecret: string;
-   projectPolicy?: RateLimitPolicy;
-   keyPolicy?: RateLimitPolicy;
 }
 
 interface UsageRequest {
    nowMs?: number;
    keyID?: string;
-   projectPolicy?: RateLimitPolicy;
-   keyPolicy?: RateLimitPolicy;
 }
 
 interface CounterState {
@@ -31,8 +53,11 @@ interface CounterState {
    monthCount: number;
 }
 
+type DeniedReason = 'invalid_key' | 'rate_limited';
+
 export interface ApiKeyRateLimitDecision {
    allowed: boolean;
+   deniedReason?: DeniedReason;
    limitDaily: number | null;
    limitWeekly: number | null;
    limitMonthly: number | null;
@@ -72,6 +97,22 @@ export interface ApiKeyUsageSnapshot {
    };
 }
 
+interface ProjectConfigRow {
+   version: number;
+   daily_limit: number | null;
+   weekly_limit: number | null;
+   monthly_limit: number | null;
+}
+
+interface KeyConfigRow {
+   key_id: string;
+   secret_hash: string;
+   status: 'active' | 'revoked';
+   daily_limit: number | null;
+   weekly_limit: number | null;
+   monthly_limit: number | null;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WEEK_MS = 7 * DAY_MS;
 const MONTH_MS = 30 * DAY_MS;
@@ -89,23 +130,40 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       });
    }
 
-   admit(payload: AdmitRequest): ApiKeyRateLimitDecision {
+   async admit(payload: AdmitRequest): Promise<ApiKeyRateLimitDecision> {
       const nowMs = Number.isFinite(payload.nowMs) ? Number(payload.nowMs) : Date.now();
       const requestedCost = Number.isFinite(payload.cost) ? Number(payload.cost) : 1;
       const cost = Math.max(1, Math.floor(requestedCost));
 
-      const projectPolicy = this.resolveProjectPolicy(payload.projectPolicy);
-      const keyPolicy = this.resolveKeyPolicy(payload.keyPolicy);
-
-      const projectState = this.getFreshProjectState(nowMs);
       const keyID = sanitizeKeyID(payload.keyID);
       if (!keyID) {
          throw new Error('Missing keyID');
       }
+
       const keySecret = sanitizeKeySecret(payload.keySecret);
       if (!keySecret) {
          throw new Error('Missing keySecret');
       }
+
+      const projectConfig = this.getProjectConfig();
+      if (!projectConfig) {
+         return invalidKeyDecision(keyID);
+      }
+
+      const keyConfig = this.getKeyConfig(keyID);
+      if (!keyConfig || keyConfig.status !== 'active') {
+         return invalidKeyDecision(keyID);
+      }
+
+      const providedSecretHash = await sha256Hex(keySecret);
+      if (providedSecretHash !== keyConfig.secret_hash) {
+         return invalidKeyDecision(keyID);
+      }
+
+      const projectPolicy = this.resolveProjectPolicy(projectConfig);
+      const keyPolicy = this.resolveKeyPolicy(keyConfig);
+
+      const projectState = this.getFreshProjectState(nowMs);
       const keyState = this.getFreshKeyState(keyID, nowMs);
 
       const nextProjectDaily = projectState.dayCount + cost;
@@ -146,6 +204,7 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
 
          return {
             allowed: false,
+            deniedReason: 'rate_limited',
             limitDaily: nullable(projectPolicy.dailyLimit),
             limitWeekly: nullable(projectPolicy.weeklyLimit),
             limitMonthly: nullable(projectPolicy.monthlyLimit),
@@ -199,8 +258,7 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
 
    usage(payload?: UsageRequest): ApiKeyUsageSnapshot {
       const nowMs = Number.isFinite(payload?.nowMs) ? Number(payload?.nowMs) : Date.now();
-      const projectPolicy = this.resolveProjectPolicy(payload?.projectPolicy);
-      const keyPolicy = this.resolveKeyPolicy(payload?.keyPolicy);
+      const projectPolicy = this.resolveProjectPolicy(this.getProjectConfig());
 
       const projectState = this.getFreshProjectState(nowMs);
       const snapshot: ApiKeyUsageSnapshot = {
@@ -210,6 +268,8 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       const keyID = sanitizeKeyID(payload?.keyID);
       if (keyID) {
          const keyState = this.getFreshKeyState(keyID, nowMs);
+         const keyPolicy = this.resolveKeyPolicy(this.getKeyConfig(keyID));
+
          snapshot.key = {
             keyID,
             counters: toUsageCounters(keyState, keyPolicy),
@@ -219,7 +279,132 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       return snapshot;
    }
 
+   syncProjectConfig(payload: SyncProjectConfigRequest): SyncProjectConfigResponse {
+      const version = parseRequiredVersion(payload.version);
+      const currentVersion = this.getCurrentVersion();
+      if (version <= currentVersion) {
+         return {
+            ok: true,
+            applied: false,
+            version,
+            currentVersion,
+         };
+      }
+
+      const nowMs = Date.now();
+      const projectPolicy = normalizePolicy(payload.projectPolicy);
+
+      this.sql.exec(
+         `
+            INSERT INTO project_config (
+               id,
+               version,
+               daily_limit,
+               weekly_limit,
+               monthly_limit,
+               updated_at_ms
+            )
+            VALUES (1, ?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+               version = excluded.version,
+               daily_limit = excluded.daily_limit,
+               weekly_limit = excluded.weekly_limit,
+               monthly_limit = excluded.monthly_limit,
+               updated_at_ms = excluded.updated_at_ms
+         `,
+         version,
+         projectPolicy.dailyLimit,
+         projectPolicy.weeklyLimit,
+         projectPolicy.monthlyLimit,
+         nowMs,
+      );
+
+      const incomingKeys = Array.isArray(payload.keys) ? payload.keys : [];
+      const syncedKeyIDs: string[] = [];
+
+      for (const key of incomingKeys) {
+         const keyID = sanitizeKeyID(key?.keyID);
+         if (!keyID) {
+            throw new Error('Invalid keyID in keys payload');
+         }
+
+         const secretHash = sanitizeSecretHash(key?.secretHash);
+         if (!secretHash) {
+            throw new Error('Invalid secretHash in keys payload');
+         }
+
+         const status = normalizeKeyStatus(key?.status);
+         if (!status) {
+            throw new Error('Invalid status in keys payload');
+         }
+
+         const keyPolicy = normalizePolicy(key?.keyPolicy);
+
+         this.sql.exec(
+            `
+               INSERT INTO key_config (
+                  key_id,
+                  secret_hash,
+                  status,
+                  daily_limit,
+                  weekly_limit,
+                  monthly_limit,
+                  updated_at_ms
+               )
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+               ON CONFLICT(key_id) DO UPDATE SET
+                  secret_hash = excluded.secret_hash,
+                  status = excluded.status,
+                  daily_limit = excluded.daily_limit,
+                  weekly_limit = excluded.weekly_limit,
+                  monthly_limit = excluded.monthly_limit,
+                  updated_at_ms = excluded.updated_at_ms
+            `,
+            keyID,
+            secretHash,
+            status,
+            keyPolicy.dailyLimit,
+            keyPolicy.weeklyLimit,
+            keyPolicy.monthlyLimit,
+            nowMs,
+         );
+
+         syncedKeyIDs.push(keyID);
+      }
+
+      this.deleteRemovedKeys(syncedKeyIDs);
+
+      return {
+         ok: true,
+         applied: true,
+         version,
+      };
+   }
+
    private initializeSchema(): void {
+      this.sql.exec(`
+         CREATE TABLE IF NOT EXISTS project_config (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            version INTEGER NOT NULL,
+            daily_limit INTEGER,
+            weekly_limit INTEGER,
+            monthly_limit INTEGER,
+            updated_at_ms INTEGER NOT NULL
+         )
+      `);
+
+      this.sql.exec(`
+         CREATE TABLE IF NOT EXISTS key_config (
+            key_id TEXT PRIMARY KEY,
+            secret_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            daily_limit INTEGER,
+            weekly_limit INTEGER,
+            monthly_limit INTEGER,
+            updated_at_ms INTEGER NOT NULL
+         )
+      `);
+
       this.sql.exec(`
          CREATE TABLE IF NOT EXISTS project_limiter_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -243,6 +428,88 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
             month_count INTEGER NOT NULL
          )
       `);
+   }
+
+   private getCurrentVersion(): number {
+      const row = this.sql.exec('SELECT version FROM project_config WHERE id = 1').toArray()[0] as
+         | { version?: unknown }
+         | undefined;
+
+      const parsed = row ? Number(row.version) : 0;
+      return Number.isFinite(parsed) ? parsed : 0;
+   }
+
+   private getProjectConfig(): ProjectConfigRow | null {
+      const row = this.sql.exec('SELECT version, daily_limit, weekly_limit, monthly_limit FROM project_config WHERE id = 1')
+         .toArray()[0] as
+         | {
+              version?: unknown;
+              daily_limit?: unknown;
+              weekly_limit?: unknown;
+              monthly_limit?: unknown;
+           }
+         | undefined;
+
+      if (!row) {
+         return null;
+      }
+
+      return {
+         version: Number(row.version),
+         daily_limit: nullableInt(row.daily_limit),
+         weekly_limit: nullableInt(row.weekly_limit),
+         monthly_limit: nullableInt(row.monthly_limit),
+      };
+   }
+
+   private getKeyConfig(keyID: string): KeyConfigRow | null {
+      const row = this.sql
+         .exec(
+            'SELECT key_id, secret_hash, status, daily_limit, weekly_limit, monthly_limit FROM key_config WHERE key_id = ?1',
+            keyID,
+         )
+         .toArray()[0] as
+         | {
+              key_id?: unknown;
+              secret_hash?: unknown;
+              status?: unknown;
+              daily_limit?: unknown;
+              weekly_limit?: unknown;
+              monthly_limit?: unknown;
+           }
+         | undefined;
+
+      if (!row) {
+         return null;
+      }
+
+      const status = normalizeKeyStatus(row.status);
+      const keyIDValue = typeof row.key_id === 'string' ? row.key_id : '';
+      const secretHashValue = sanitizeSecretHash(typeof row.secret_hash === 'string' ? row.secret_hash : undefined);
+      if (!status || !keyIDValue || !secretHashValue) {
+         return null;
+      }
+
+      return {
+         key_id: keyIDValue,
+         secret_hash: secretHashValue,
+         status,
+         daily_limit: nullableInt(row.daily_limit),
+         weekly_limit: nullableInt(row.weekly_limit),
+         monthly_limit: nullableInt(row.monthly_limit),
+      };
+   }
+
+   private deleteRemovedKeys(allowedKeyIDs: string[]): void {
+      if (allowedKeyIDs.length === 0) {
+         this.sql.exec('DELETE FROM key_config');
+         this.sql.exec('DELETE FROM key_limiter_state');
+         return;
+      }
+
+      const placeholders = allowedKeyIDs.map((_, index) => `?${index + 1}`).join(', ');
+      this.sql.exec(`DELETE FROM key_config WHERE key_id NOT IN (${placeholders})`, ...allowedKeyIDs);
+      this.sql.exec(`DELETE FROM key_limiter_state WHERE key_id NOT IN (${placeholders})`, ...allowedKeyIDs);
    }
 
    private getFreshProjectState(nowMs: number): CounterState {
@@ -416,29 +683,35 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       return nextState;
    }
 
-   private resolveProjectPolicy(override?: RateLimitPolicy): RateLimitPolicy {
-      const defaults: RateLimitPolicy = {
-         dailyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_DAILY_REQUESTS) ?? DEFAULT_DAILY_LIMIT,
-         weeklyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_WEEKLY_REQUESTS) ?? DEFAULT_WEEKLY_LIMIT,
-         monthlyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_MONTHLY_REQUESTS) ?? DEFAULT_MONTHLY_LIMIT,
-      };
+   private resolveProjectPolicy(config: ProjectConfigRow | null): RateLimitPolicy {
+      if (!config) {
+         return {
+            dailyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_DAILY_REQUESTS) ?? DEFAULT_DAILY_LIMIT,
+            weeklyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_WEEKLY_REQUESTS) ?? DEFAULT_WEEKLY_LIMIT,
+            monthlyLimit: this.parseOptionalPositiveInt(this.env.FREE_API_KEY_MONTHLY_REQUESTS) ?? DEFAULT_MONTHLY_LIMIT,
+         };
+      }
 
       return {
-         dailyLimit: override?.dailyLimit ?? defaults.dailyLimit,
-         weeklyLimit: override?.weeklyLimit ?? defaults.weeklyLimit,
-         monthlyLimit: override?.monthlyLimit ?? defaults.monthlyLimit,
+         dailyLimit: this.parseOptionalPositiveInt(config.daily_limit),
+         weeklyLimit: this.parseOptionalPositiveInt(config.weekly_limit),
+         monthlyLimit: this.parseOptionalPositiveInt(config.monthly_limit),
       };
    }
 
-   private resolveKeyPolicy(override?: RateLimitPolicy): RateLimitPolicy {
+   private resolveKeyPolicy(config: KeyConfigRow | null): RateLimitPolicy {
+      if (!config) {
+         return {};
+      }
+
       return {
-         dailyLimit: this.parseOptionalPositiveInt(override?.dailyLimit),
-         weeklyLimit: this.parseOptionalPositiveInt(override?.weeklyLimit),
-         monthlyLimit: this.parseOptionalPositiveInt(override?.monthlyLimit),
+         dailyLimit: this.parseOptionalPositiveInt(config.daily_limit),
+         weeklyLimit: this.parseOptionalPositiveInt(config.weekly_limit),
+         monthlyLimit: this.parseOptionalPositiveInt(config.monthly_limit),
       };
    }
 
-   private parseOptionalPositiveInt(value: string | number | undefined): number | undefined {
+   private parseOptionalPositiveInt(value: string | number | null | undefined): number | undefined {
       if (value === undefined || value === null || value === '') {
          return undefined;
       }
@@ -465,7 +738,7 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
    private calculateRetryAfterSeconds(params: {
       nowMs: number;
       projectState: CounterState;
-      keyState: CounterState | null;
+      keyState: CounterState;
       projectDayExceeded: boolean;
       projectWeekExceeded: boolean;
       projectMonthExceeded: boolean;
@@ -487,20 +760,62 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
          retries.push(Math.max(1, Math.ceil((params.projectState.monthWindowStartMs + MONTH_MS - params.nowMs) / 1000)));
       }
 
-      if (params.keyState && params.keyDayExceeded) {
+      if (params.keyDayExceeded) {
          retries.push(Math.max(1, Math.ceil((params.keyState.dayWindowStartMs + DAY_MS - params.nowMs) / 1000)));
       }
 
-      if (params.keyState && params.keyWeekExceeded) {
+      if (params.keyWeekExceeded) {
          retries.push(Math.max(1, Math.ceil((params.keyState.weekWindowStartMs + WEEK_MS - params.nowMs) / 1000)));
       }
 
-      if (params.keyState && params.keyMonthExceeded) {
+      if (params.keyMonthExceeded) {
          retries.push(Math.max(1, Math.ceil((params.keyState.monthWindowStartMs + MONTH_MS - params.nowMs) / 1000)));
       }
 
       return retries.length > 0 ? Math.max(...retries) : 1;
    }
+}
+
+function parseRequiredVersion(value: number): number {
+   const parsed = Math.floor(Number(value));
+   if (!Number.isFinite(parsed) || parsed < 1) {
+      throw new Error('Invalid version');
+   }
+
+   return parsed;
+}
+
+function normalizePolicy(input: NullableRateLimitPolicy | undefined): {
+   dailyLimit: number | null;
+   weeklyLimit: number | null;
+   monthlyLimit: number | null;
+} {
+   return {
+      dailyLimit: normalizeNullableLimit(input?.dailyLimit),
+      weeklyLimit: normalizeNullableLimit(input?.weeklyLimit),
+      monthlyLimit: normalizeNullableLimit(input?.monthlyLimit),
+   };
+}
+
+function normalizeNullableLimit(value: number | null | undefined): number | null {
+   if (value === null || value === undefined) {
+      return null;
+   }
+
+   const parsed = Number.parseInt(String(value), 10);
+   if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error('Invalid rate limit value');
+   }
+
+   return parsed;
+}
+
+function normalizeKeyStatus(value: unknown): 'active' | 'revoked' | null {
+   if (value === 'active' || value === 'revoked') {
+      return value;
+   }
+
+   return null;
 }
 
 function sanitizeKeyID(raw: string | undefined): string | undefined {
@@ -519,6 +834,49 @@ function sanitizeKeySecret(raw: string | undefined): string | undefined {
    }
 
    return trimmed.slice(0, 256);
+}
+
+function sanitizeSecretHash(raw: string | undefined): string | undefined {
+   const trimmed = raw?.trim().toLowerCase();
+   if (!trimmed) {
+      return undefined;
+   }
+
+   if (!/^[a-f0-9]{64}$/.test(trimmed)) {
+      return undefined;
+   }
+
+   return trimmed;
+}
+
+function nullableInt(value: unknown): number | null {
+   if (value === null || value === undefined) {
+      return null;
+   }
+
+   const parsed = Number.parseInt(String(value), 10);
+   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function invalidKeyDecision(keyID: string): ApiKeyRateLimitDecision {
+   return {
+      allowed: false,
+      deniedReason: 'invalid_key',
+      limitDaily: null,
+      limitWeekly: null,
+      limitMonthly: null,
+      remainingDaily: null,
+      remainingWeekly: null,
+      remainingMonthly: null,
+      retryAfterSeconds: 0,
+      keyID,
+      keyLimitDaily: null,
+      keyLimitWeekly: null,
+      keyLimitMonthly: null,
+      keyRemainingDaily: null,
+      keyRemainingWeekly: null,
+      keyRemainingMonthly: null,
+   };
 }
 
 function exceeds(count: number, limit: number | undefined): boolean {
@@ -552,4 +910,13 @@ function toUsageCounters(state: CounterState, policy: RateLimitPolicy): UsageCou
       remainingWeekly: remaining(policy.weeklyLimit, state.weekCount),
       remainingMonthly: remaining(policy.monthlyLimit, state.monthCount),
    };
+}
+
+async function sha256Hex(value: string): Promise<string> {
+   const data = new TextEncoder().encode(value);
+   const digest = await crypto.subtle.digest('SHA-256', data);
+   const bytes = new Uint8Array(digest);
+   return Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
 }
