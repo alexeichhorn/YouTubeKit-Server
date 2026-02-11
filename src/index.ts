@@ -1,8 +1,8 @@
 import { YouTubeService } from './youtube/service';
 import { AppRateLimiter } from './durable-objects/app-rate-limiter';
 import { ApiKeyRateLimiter } from './durable-objects/api-key-rate-limiter';
-import { RateLimitAdmissionService } from './services/rate-limit-admission-service';
-import { RateLimitInternalService } from './services/rate-limit-internal-service';
+import { RateLimitAdmissionService } from './rate-limit-admission/service';
+import { RateLimitInternalService } from './rate-limit-internal/service';
 
 export { AppRateLimiter };
 export { ApiKeyRateLimiter };
