@@ -1,10 +1,20 @@
+import { z } from 'zod';
+
 export type RateTier = 'public_no_key' | 'free_api_key';
 
-export interface ParsedApiKey {
-   projectPublicID: string;
-   keyID: string;
-   keySecret: string;
-}
+export const ApiKeyPattern = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/;
+
+export const NormalizedApiKeySchema = z.string().trim().min(1);
+export const RawApiKeySchema = z.string().trim().regex(ApiKeyPattern);
+export const ParsedApiKeySchema = z
+   .object({
+      projectPublicID: z.string().min(1).max(64),
+      keyID: z.string().min(1).max(64),
+      keySecret: z.string().min(16),
+   })
+   .strict();
+
+export type ParsedApiKey = z.infer<typeof ParsedApiKeySchema>;
 
 export interface EffectiveDecision {
    tier: RateTier;
