@@ -10,6 +10,7 @@ interface AdmitRequest {
    cost?: number;
    nowMs?: number;
    keyID: string;
+   keySecret: string;
    projectPolicy?: RateLimitPolicy;
    keyPolicy?: RateLimitPolicy;
 }
@@ -100,6 +101,10 @@ export class ApiKeyRateLimiter extends DurableObject<Env> {
       const keyID = sanitizeKeyID(payload.keyID);
       if (!keyID) {
          throw new Error('Missing keyID');
+      }
+      const keySecret = sanitizeKeySecret(payload.keySecret);
+      if (!keySecret) {
+         throw new Error('Missing keySecret');
       }
       const keyState = this.getFreshKeyState(keyID, nowMs);
 
@@ -505,6 +510,15 @@ function sanitizeKeyID(raw: string | undefined): string | undefined {
    }
 
    return trimmed.slice(0, 128);
+}
+
+function sanitizeKeySecret(raw: string | undefined): string | undefined {
+   const trimmed = raw?.trim();
+   if (!trimmed) {
+      return undefined;
+   }
+
+   return trimmed.slice(0, 256);
 }
 
 function exceeds(count: number, limit: number | undefined): boolean {

@@ -16,6 +16,7 @@ type RateTier = 'public_no_key' | 'free_api_key';
 interface ParsedApiKey {
    projectPublicID: string;
    keyID: string;
+   keySecret: string;
 }
 
 interface EffectiveDecision {
@@ -128,6 +129,7 @@ async function checkApiKeyRateLimit(parsedKey: ParsedApiKey, env: Env): Promise<
       cost: 1,
       nowMs: Date.now(),
       keyID: parsedKey.keyID,
+      keySecret: parsedKey.keySecret,
    });
 
    return {
@@ -225,14 +227,15 @@ function parseApiKey(raw: string): ParsedApiKey | null {
       return null;
    }
 
-   const [, projectPublicID, keyID] = match;
-   if (!projectPublicID || !keyID) {
+   const [, projectPublicID, keyID, keySecret] = match;
+   if (!projectPublicID || !keyID || !keySecret) {
       return null;
    }
 
    return {
       projectPublicID,
       keyID,
+      keySecret,
    };
 }
 
