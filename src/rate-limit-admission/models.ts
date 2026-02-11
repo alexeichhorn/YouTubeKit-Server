@@ -24,30 +24,3 @@ export interface RateLimitCheckResult {
    parsedKey: ParsedApiKey | null;
    decision: EffectiveDecision | null;
 }
-
-export function parseApiKey(raw: string): ParsedApiKey | null {
-   const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
-   if (!match) {
-      return null;
-   }
-
-   const [, projectPublicID, keyID, keySecret] = match;
-   if (!projectPublicID || !keyID || !keySecret) {
-      return null;
-   }
-
-   return {
-      projectPublicID,
-      keyID,
-      keySecret,
-   };
-}
-
-export function normalizeApiKey(value: string | null): string | null {
-   const trimmed = value?.trim();
-   if (!trimmed) {
-      return null;
-   }
-
-   return trimmed;
-}

@@ -1,5 +1,6 @@
-import { normalizeApiKey, parseApiKey } from '../rate-limit-admission/models';
-import { parseProjectConfigPayload } from './models';
+import type { SyncProjectConfigRequest } from '../durable-objects/api-key-rate-limiter';
+import type { ParsedApiKey } from '../rate-limit-admission/models';
+import type { ParsedProjectConfigPayload } from './models';
 
 const INTERNAL_USAGE_TOKEN_HEADER = 'X-Internal-Usage-Token';
 const INTERNAL_CONFIG_TOKEN_HEADER = 'X-Internal-Config-Token';
@@ -35,12 +36,12 @@ export class RateLimitInternalService {
       }
 
       if (kind === 'key') {
-         const rawApiKey = normalizeApiKey(url.searchParams.get('apiKey'));
+         const rawApiKey = this.normalizeApiKey(url.searchParams.get('apiKey'));
          if (!rawApiKey) {
             return new Response('Missing apiKey', { status: 400 });
          }
 
-         const parsedKey = parseApiKey(rawApiKey);
+         const parsedKey = this.parseApiKey(rawApiKey);
          if (!parsedKey) {
             return new Response('Invalid API key format', { status: 400 });
          }
@@ -75,7 +76,7 @@ export class RateLimitInternalService {
          return new Response('Invalid JSON body', { status: 400 });
       }
 
-      const parsed = parseProjectConfigPayload(payload);
+      const parsed = this.parseProjectConfigPayload(payload);
       if (!parsed) {
          return new Response('Invalid project config payload', { status: 400 });
       }
@@ -113,6 +114,147 @@ export class RateLimitInternalService {
 
       const providedToken = request.headers.get(INTERNAL_CONFIG_TOKEN_HEADER)?.trim();
       return Boolean(providedToken && providedToken === configuredToken);
+   }
+
+   private parseProjectConfigPayload(payload: unknown): ParsedProjectConfigPayload | null {
+      if (!payload || typeof payload !== 'object') {
+         return null;
+      }
+
+      const raw = payload as Record<string, unknown>;
+      const projectID = typeof raw.projectID === 'string' ? raw.projectID.trim() : '';
+      if (!projectID) {
+         return null;
+      }
+
+      const version = Number(raw.version);
+      if (!Number.isInteger(version)) {
+         return null;
+      }
+
+      const keysRaw = raw.keys;
+      if (!Array.isArray(keysRaw)) {
+         return null;
+      }
+
+      const keys = keysRaw.map((entry): SyncProjectConfigRequest['keys'][number] | null => {
+         if (!entry || typeof entry !== 'object') {
+            return null;
+         }
+         const key = entry as Record<string, unknown>;
+
+         const keyID = typeof key.keyID === 'string' ? key.keyID : null;
+         const secretHash = typeof key.secretHash === 'string' ? key.secretHash : null;
+         const status = this.parseKeyStatus(key.status);
+         const keyPolicy = this.parseNullablePolicyObject(key.keyPolicy);
+
+         if (!keyID || !secretHash || !status || keyPolicy === undefined) {
+            return null;
+         }
+
+         return {
+            keyID,
+            secretHash,
+            status,
+            keyPolicy,
+         };
+      });
+
+      if (keys.some((key) => key === null)) {
+         return null;
+      }
+
+      const projectPolicy = this.parseNullablePolicyObject(raw.projectPolicy);
+      if (projectPolicy === undefined) {
+         return null;
+      }
+
+      return {
+         projectID,
+         config: {
+            version,
+            projectPolicy,
+            keys: keys as SyncProjectConfigRequest['keys'],
+         },
+      };
+   }
+
+   private parseKeyStatus(value: unknown): 'active' | 'revoked' | null {
+      if (value === 'active' || value === 'revoked') {
+         return value;
+      }
+
+      return null;
+   }
+
+   private parseNullablePolicyObject(value: unknown):
+      | {
+           dailyLimit?: number | null;
+           weeklyLimit?: number | null;
+           monthlyLimit?: number | null;
+        }
+      | undefined {
+      if (value === undefined || value === null) {
+         return {};
+      }
+      if (typeof value !== 'object') {
+         return undefined;
+      }
+
+      const raw = value as Record<string, unknown>;
+
+      const dailyLimit = this.parseNullableLimit(raw.dailyLimit);
+      const weeklyLimit = this.parseNullableLimit(raw.weeklyLimit);
+      const monthlyLimit = this.parseNullableLimit(raw.monthlyLimit);
+      if (dailyLimit === undefined || weeklyLimit === undefined || monthlyLimit === undefined) {
+         return undefined;
+      }
+
+      return {
+         dailyLimit,
+         weeklyLimit,
+         monthlyLimit,
+      };
+   }
+
+   private parseNullableLimit(value: unknown): number | null | undefined {
+      if (value === undefined || value === null) {
+         return null;
+      }
+
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) {
+         return undefined;
+      }
+
+      return parsed;
+   }
+
+   private parseApiKey(raw: string): ParsedApiKey | null {
+      const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
+      if (!match) {
+         return null;
+      }
+
+      const [, projectPublicID, keyID, keySecret] = match;
+      if (!projectPublicID || !keyID || !keySecret) {
+         return null;
+      }
+
+      return {
+         projectPublicID,
+         keyID,
+         keySecret,
+      };
+   }
+
+   private normalizeApiKey(value: string | null): string | null {
+      const trimmed = value?.trim();
+      if (!trimmed) {
+         return null;
+      }
+
+      return trimmed;
    }
 
    private json(value: unknown): Response {

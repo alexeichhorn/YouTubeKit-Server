@@ -1,12 +1,11 @@
 import type { EffectiveDecision, ParsedApiKey, RateLimitCheckResult } from './models';
-import { normalizeApiKey, parseApiKey } from './models';
 
 export class RateLimitAdmissionService {
    constructor(private readonly env: Env) {}
 
    async evaluate(appID: string, rawApiKey: string | null): Promise<RateLimitCheckResult> {
-      const normalizedApiKey = normalizeApiKey(rawApiKey);
-      const parsedKey = normalizedApiKey ? parseApiKey(normalizedApiKey) : null;
+      const normalizedApiKey = this.normalizeApiKey(rawApiKey);
+      const parsedKey = normalizedApiKey ? this.parseApiKey(normalizedApiKey) : null;
 
       if (normalizedApiKey && !parsedKey) {
          return {
@@ -85,5 +84,32 @@ export class RateLimitAdmissionService {
          tier: 'free_api_key',
          ...decision,
       };
+   }
+
+   private parseApiKey(raw: string): ParsedApiKey | null {
+      const match = /^ytk_([^_]{1,64})_([^_]{1,64})_(.{16,})$/.exec(raw);
+      if (!match) {
+         return null;
+      }
+
+      const [, projectPublicID, keyID, keySecret] = match;
+      if (!projectPublicID || !keyID || !keySecret) {
+         return null;
+      }
+
+      return {
+         projectPublicID,
+         keyID,
+         keySecret,
+      };
+   }
+
+   private normalizeApiKey(value: string | null): string | null {
+      const trimmed = value?.trim();
+      if (!trimmed) {
+         return null;
+      }
+
+      return trimmed;
    }
 }
