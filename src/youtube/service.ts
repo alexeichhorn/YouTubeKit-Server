@@ -5,6 +5,9 @@ import { fileExtensionFromMimeType } from './file_extension';
 import { evaluateJavaScript } from './js-evaluator';
 
 export class YouTubeService {
+   // Mirror the temporary yt-dlp / YouTubeKit workaround while the current player JS is unstable.
+   private static readonly PLAYER_ID_OVERRIDE = '9f4cc5e4';
+
    readonly videoID: string;
    private websocket: WebSocket;
    private inflightFetches = new Map<string, (msg: RemoteURLResponse) => void>();
@@ -97,7 +100,10 @@ export class YouTubeService {
             return await evaluateJavaScript(data, env);
          };
 
-         const innertube = await Innertube.create({ fetch: wsFetch });
+         const innertube = await Innertube.create({
+            fetch: wsFetch,
+            player_id: YouTubeService.PLAYER_ID_OVERRIDE,
+         });
          const streams = await this.getStreams(innertube);
 
          this.send({ type: ServerMessageType.result, content: streams });
