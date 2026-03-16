@@ -248,7 +248,9 @@ export class YouTubeService {
    // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube): Promise<RemoteStream[]> {
-      const clients: AvailableInnertubeClient[] = ['ANDROID_VR', 'WEB_EMBEDDED'];
+      const clients: AvailableInnertubeClient[] = ['ANDROID_VR', 'WEB'];
+      const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
+
       let allStreams: RemoteStream[] = [];
 
       for (const client of clients) {
@@ -262,6 +264,14 @@ export class YouTubeService {
 
       // TODO: remove duplicate itags
       // TODO: parallelize it
+
+      if (allStreams.length === 0) {
+         try {
+            return await this.getStreamsForClient(innertube, fallbackClient);
+         } catch (error) {
+            console.error(`Failed to get streams for fallback client ${fallbackClient}:`, error);
+         }
+      }
 
       return allStreams;
    }
