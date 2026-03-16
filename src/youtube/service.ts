@@ -5,8 +5,7 @@ import { fileExtensionFromMimeType } from './file_extension';
 import { evaluateJavaScript } from './js-evaluator';
 
 export class YouTubeService {
-   // Mirror the temporary yt-dlp / YouTubeKit workaround while the current player JS is unstable.
-   private static readonly PLAYER_ID_OVERRIDE = '9f4cc5e4';
+   private static readonly PLAYER_ID_OVERRIDE: string | undefined = undefined;
 
    readonly videoID: string;
    private websocket: WebSocket;
@@ -102,7 +101,7 @@ export class YouTubeService {
 
          const innertube = await Innertube.create({
             fetch: wsFetch,
-            player_id: YouTubeService.PLAYER_ID_OVERRIDE,
+            ...(YouTubeService.PLAYER_ID_OVERRIDE ? { player_id: YouTubeService.PLAYER_ID_OVERRIDE } : {}),
          });
          const streams = await this.getStreams(innertube);
 
