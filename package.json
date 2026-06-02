@@ -11,10 +11,10 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
+		"@cloudflare/vitest-pool-workers": "^0.16.11",
 		"typescript": "^5.5.2",
-		"vitest": "~3.0.7",
-		"wrangler": "^4.14.1"
+		"vitest": "^4.1.8",
+		"wrangler": "^4.96.0"
 	},
 	"dependencies": {
 		"quickjs-emscripten": "^0.31.0",
