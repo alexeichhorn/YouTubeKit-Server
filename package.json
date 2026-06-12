@@ -18,6 +18,6 @@
 	},
 	"dependencies": {
 		"quickjs-emscripten": "^0.31.0",
-		"youtubei.js": "github:alexeichhorn/YouTube.js#feat/android-sdkless-client"
+		"youtubei.js": "github:alexeichhorn/YouTube.js#4f74d89a"
 	}
 }

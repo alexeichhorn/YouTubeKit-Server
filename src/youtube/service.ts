@@ -261,18 +261,29 @@ export class YouTubeService {
          }
       }
 
-      // TODO: remove duplicate itags
       // TODO: parallelize it
 
       if (allStreams.length === 0) {
          try {
-            return await this.getStreamsForClient(innertube, fallbackClient);
+            return this.deduplicateStreams(await this.getStreamsForClient(innertube, fallbackClient));
          } catch (error) {
             console.error(`Failed to get streams for fallback client ${fallbackClient}:`, error);
          }
       }
 
-      return allStreams;
+      return this.deduplicateStreams(allStreams);
+   }
+
+   private deduplicateStreams(streams: RemoteStream[]): RemoteStream[] {
+      const streamsByItag = new Map<number, RemoteStream>();
+
+      for (const stream of streams) {
+         if (!streamsByItag.has(stream.itag)) {
+            streamsByItag.set(stream.itag, stream);
+         }
+      }
+
+      return Array.from(streamsByItag.values());
    }
 
    private async getStreamsForClient(innertube: Innertube, client: AvailableInnertubeClient): Promise<RemoteStream[]> {
