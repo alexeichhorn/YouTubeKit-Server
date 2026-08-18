@@ -247,7 +247,7 @@ export class YouTubeService {
    // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube): Promise<RemoteStream[]> {
-      const clients: AvailableInnertubeClient[] = ['ANDROID_VR', 'WEB'];
+      const clients: AvailableInnertubeClient[] = ['VISIONOS', 'WEB'];
       const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
 
       let allStreams: RemoteStream[] = [];

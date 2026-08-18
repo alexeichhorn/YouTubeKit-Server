@@ -5,6 +5,7 @@ export type AvailableInnertubeClient =
    | 'MWEB'
    | 'ANDROID'
    | 'ANDROID_VR'
+   | 'VISIONOS'
    | 'YTMUSIC'
    | 'YTMUSIC_ANDROID'
    | 'YTSTUDIO_ANDROID'
