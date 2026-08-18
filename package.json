@@ -18,6 +18,6 @@
 	},
 	"dependencies": {
 		"quickjs-emscripten": "^0.31.0",
-		"youtubei.js": "github:alexeichhorn/YouTube.js#f4a66ec3e26dafcafdb81f4e4a0091c67238b605"
+		"youtubei.js": "github:alexeichhorn/YouTube.js#d3adc7d03259f899cc1c767ad2a09b23d6185573"
 	}
 }

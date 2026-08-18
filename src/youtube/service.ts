@@ -103,7 +103,7 @@ export class YouTubeService {
             fetch: wsFetch,
             ...(YouTubeService.PLAYER_ID_OVERRIDE ? { player_id: YouTubeService.PLAYER_ID_OVERRIDE } : {}),
          });
-         const streams = await this.getStreams(innertube);
+         const streams = await this.getStreams(innertube, wsFetch);
 
          this.send({ type: ServerMessageType.result, content: streams });
       } catch (error: any) {
@@ -246,8 +246,8 @@ export class YouTubeService {
 
    // - InnerTube Methods -
 
-   private async getStreams(innertube: Innertube): Promise<RemoteStream[]> {
-      const clients: AvailableInnertubeClient[] = ['ANDROID_VR', 'WEB'];
+   private async getStreams(innertube: Innertube, fetcher: typeof fetch): Promise<RemoteStream[]> {
+      const clients: AvailableInnertubeClient[] = ['VISIONOS', 'WEB'];
       const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
 
       let allStreams: RemoteStream[] = [];
@@ -265,7 +265,8 @@ export class YouTubeService {
 
       if (allStreams.length === 0) {
          try {
-            return this.deduplicateStreams(await this.getStreamsForClient(innertube, fallbackClient));
+            const encryptedHostFlags = await this.getEncryptedHostFlags(fetcher);
+            return this.deduplicateStreams(await this.getStreamsForClient(innertube, fallbackClient, encryptedHostFlags));
          } catch (error) {
             console.error(`Failed to get streams for fallback client ${fallbackClient}:`, error);
          }
@@ -286,8 +287,34 @@ export class YouTubeService {
       return Array.from(streamsByItag.values());
    }
 
-   private async getStreamsForClient(innertube: Innertube, client: AvailableInnertubeClient): Promise<RemoteStream[]> {
-      const info = await innertube.getInfo(this.videoID, { client });
+   private extractEncryptedHostFlags(html: string): string {
+      const encryptedHostFlags = html.match(/"encryptedHostFlags":"([^"]+)"/)?.[1];
+      if (!encryptedHostFlags) {
+         throw new Error('Embedded player config is missing encrypted host flags');
+      }
+      return encryptedHostFlags;
+   }
+
+   private async getEncryptedHostFlags(fetcher: typeof fetch): Promise<string> {
+      const response = await fetcher(`https://www.youtube.com/embed/${this.videoID}`, {
+         headers: {
+            'Accept-Language': 'en-US,en',
+            'Referer': 'https://www.reddit.com/',
+            'User-Agent': 'Mozilla/5.0',
+         },
+      });
+      if (!response.ok) {
+         throw new Error(`Failed to load embedded player config: ${response.status}`);
+      }
+      return this.extractEncryptedHostFlags(await response.text());
+   }
+
+   private async getStreamsForClient(
+      innertube: Innertube,
+      client: AvailableInnertubeClient,
+      encryptedHostFlags?: string
+   ): Promise<RemoteStream[]> {
+      const info = await innertube.getInfo(this.videoID, { client, encrypted_host_flags: encryptedHostFlags });
       const f = info.streaming_data || { formats: [], adaptive_formats: [] };
       const formats = [...(f.formats ?? []), ...(f.adaptive_formats ?? [])];
 
