@@ -379,6 +379,8 @@ export class YouTubeService {
                   average_bitrate: format.bitrate || undefined,
                   audio_bitrate: format.has_audio ? format.bitrate : undefined,
                   video_bitrate: format.has_video ? format.bitrate : undefined,
+                  width: format.width,
+                  height: format.height,
                   filesize: format.content_length ? Number(format.content_length) : undefined,
                };
                return stream;
