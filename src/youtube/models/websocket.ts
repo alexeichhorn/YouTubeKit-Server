@@ -28,6 +28,8 @@ export interface RemoteStream {
    average_bitrate?: number;
    audio_bitrate?: number;
    video_bitrate?: number;
+   width?: number;
+   height?: number;
    filesize?: number;
 }
 
