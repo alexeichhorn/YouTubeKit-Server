@@ -10,6 +10,7 @@ export type AvailableInnertubeClient =
    | 'YTMUSIC_ANDROID'
    | 'YTSTUDIO_ANDROID'
    | 'TV'
+   | 'TV_SAMSUNG'
    | 'TV_SIMPLY'
    | 'TV_EMBEDDED'
    | 'YTKIDS'

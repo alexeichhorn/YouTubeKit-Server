@@ -249,7 +249,7 @@ export class YouTubeService {
    // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube, fetcher: typeof fetch): Promise<RemoteStream[]> {
-      const clients: AvailableInnertubeClient[] = ['VISIONOS', 'WEB'];
+      const clients: AvailableInnertubeClient[] = ['TV_SAMSUNG', 'VISIONOS', 'WEB'];
       const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
 
       let allStreams: RemoteStream[] = [];
@@ -312,7 +312,7 @@ export class YouTubeService {
    ): Promise<RemoteStream[]> {
       const info = await innertube.getInfo(this.videoID, { client, encrypted_host_flags: encryptedHostFlags });
       const f = info.streaming_data || { formats: [], adaptive_formats: [] };
-      const formats = [...(f.formats ?? []), ...(f.adaptive_formats ?? [])];
+      const formats = [...(f.formats ?? []), ...(f.adaptive_formats ?? [])].filter(format => !format.drm_families?.length);
 
       // Process formats in batches to reduce memory pressure (avoids exceeding 128MB limit)
       const BATCH_SIZE = 5;
