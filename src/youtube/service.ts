@@ -3,11 +3,13 @@ import { ServerMessage, ServerMessageType, RemoteURLResponse, RemoteURLRequest, 
 import { AvailableInnertubeClient } from './models/internal';
 import { fileExtensionFromMimeType } from './file_extension';
 import { evaluateJavaScript } from './js-evaluator';
+import { applyEmbeddedPlayerConfig, EmbeddedPlayerConfig, extractEmbeddedPlayerConfig } from './embedded-player';
 
 export class YouTubeService {
    private static readonly PLAYER_ID_OVERRIDE: string | undefined = undefined;
 
    readonly videoID: string;
+   private embeddedPlayerConfig?: EmbeddedPlayerConfig;
    private websocket: WebSocket;
    private inflightFetches = new Map<string, (msg: RemoteURLResponse) => void>();
 
@@ -27,7 +29,7 @@ export class YouTubeService {
 
    async start() {
       const wsFetch: typeof fetch = async (input, init = {}) => {
-         const req = new Request(input, init);
+         const req = await applyEmbeddedPlayerConfig(new Request(input, init), this.embeddedPlayerConfig);
          const id = crypto.randomUUID();
 
          const body = req.body ? await req.arrayBuffer() : undefined;
@@ -265,8 +267,10 @@ export class YouTubeService {
 
       if (allStreams.length === 0) {
          try {
-            const encryptedHostFlags = await this.getEncryptedHostFlags(fetcher);
-            return this.deduplicateStreams(await this.getStreamsForClient(innertube, fallbackClient, encryptedHostFlags));
+            this.embeddedPlayerConfig = await this.getEmbeddedPlayerConfig(fetcher);
+            return this.deduplicateStreams(
+               await this.getStreamsForClient(innertube, fallbackClient, this.embeddedPlayerConfig.encryptedHostFlags)
+            );
          } catch (error) {
             console.error(`Failed to get streams for fallback client ${fallbackClient}:`, error);
          }
@@ -287,15 +291,7 @@ export class YouTubeService {
       return Array.from(streamsByItag.values());
    }
 
-   private extractEncryptedHostFlags(html: string): string {
-      const encryptedHostFlags = html.match(/"encryptedHostFlags":"([^"]+)"/)?.[1];
-      if (!encryptedHostFlags) {
-         throw new Error('Embedded player config is missing encrypted host flags');
-      }
-      return encryptedHostFlags;
-   }
-
-   private async getEncryptedHostFlags(fetcher: typeof fetch): Promise<string> {
+   private async getEmbeddedPlayerConfig(fetcher: typeof fetch): Promise<EmbeddedPlayerConfig> {
       const response = await fetcher(`https://www.youtube.com/embed/${this.videoID}`, {
          headers: {
             'Accept-Language': 'en-US,en',
@@ -306,7 +302,7 @@ export class YouTubeService {
       if (!response.ok) {
          throw new Error(`Failed to load embedded player config: ${response.status}`);
       }
-      return this.extractEncryptedHostFlags(await response.text());
+      return extractEmbeddedPlayerConfig(await response.text());
    }
 
    private async getStreamsForClient(
