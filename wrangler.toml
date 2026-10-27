@@ -25,7 +25,13 @@ class_name = "AppRateLimiter"
 tag = "v1"
 new_sqlite_classes = [ "AppRateLimiter" ]
 
+[previews.vars]
+RATE_LIMIT_DAILY_REQUESTS = "5000"
+RATE_LIMIT_WEEKLY_REQUESTS = "20000"
 
+[[previews.durable_objects.bindings]]
+name = "APP_RATE_LIMITER"
+class_name = "AppRateLimiter"
 
 # Production environment --------------------------------------------------------
 
