@@ -315,8 +315,7 @@ export class YouTubeService {
       innertube: Innertube,
       client: AvailableInnertubeClient,
       encryptedHostFlags?: string
-	 ): Promise<TimedRemoteStream[]> {
-		 innertube.getInfo(target)
+   ): Promise<TimedRemoteStream[]> {
       // Same request as `innertube.getBasicInfo`, which hides the raw response that preroll ads are only part of
       const response = await innertube.actions.execute('/player', {
          videoId: this.videoID,
