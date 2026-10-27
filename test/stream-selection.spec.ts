@@ -2,8 +2,9 @@ import { expect, it } from 'vitest';
 import { Innertube } from 'youtubei.js';
 import { YouTubeService } from '../src/youtube/service';
 
-it('prefers Samsung clear formats while keeping clear alternatives to DRM formats', async () => {
+it('prefers Samsung clear formats while keeping clear alternatives to DRM formats and their preroll wait', async () => {
    const clients: string[] = [];
+   const service = new YouTubeService('test-video', new WebSocketPair()[1]);
    const innertube = await Innertube.create({
       generate_session_locally: true,
       retrieve_player: false,
@@ -25,14 +26,20 @@ it('prefers Samsung clear formats while keeping clear alternatives to DRM format
             { ...format, itag: 137, url: 'https://example.com/vision-clear' },
             { ...format, itag: 136, url: 'https://example.com/vision-duplicate' },
          ] : [];
-         return Response.json({ playabilityStatus: { status: 'OK' }, streamingData: { formats, adaptiveFormats: [] } });
+         const adPlacements = client === 'TVHTML5' ? [{ adPlacementRenderer: {
+            config: { adPlacementConfig: { kind: 'AD_PLACEMENT_KIND_START' } },
+            renderer: { instreamVideoAdRenderer: { skipOffsetMilliseconds: 5000 } },
+         } }] : [];
+         return Response.json({ playabilityStatus: { status: 'OK' }, streamingData: { formats, adaptiveFormats: [] }, adPlacements });
       },
    });
-   const service = new YouTubeService('test-video', new WebSocketPair()[1]);
+   const startedAt = Date.now();
    const streams = await service['getStreams'](innertube, async () => { throw new Error('Unexpected embedded fallback'); });
    expect(clients).toEqual(['TVHTML5', 'VISIONOS', 'WEB']);
    expect(streams.map(({ itag, url }) => ({ itag, url }))).toEqual([
       { itag: 136, url: 'https://example.com/samsung-clear' },
       { itag: 137, url: 'https://example.com/vision-clear' },
    ]);
+   expect(streams[0].availableAt).toBeGreaterThanOrEqual(startedAt + 5000);
+   expect(streams[1].availableAt).toBeLessThan(startedAt + 5000);
 });

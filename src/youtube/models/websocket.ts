@@ -31,6 +31,9 @@ export interface RemoteStream {
    width?: number;
    height?: number;
    filesize?: number;
+
+   /** Milliseconds from sending the `result` message until `url` may be requested (preroll ads); absent means now. */
+   available_in_ms?: number;
 }
 
 // - Communication

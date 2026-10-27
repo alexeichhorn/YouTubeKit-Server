@@ -1,3 +1,5 @@
+import { RemoteStream } from './websocket';
+
 // Using the same string literal type as youtubei.js internally uses
 export type AvailableInnertubeClient =
    | 'IOS'
@@ -16,3 +18,6 @@ export type AvailableInnertubeClient =
    | 'YTKIDS'
    | 'WEB_EMBEDDED'
    | 'WEB_CREATOR';
+
+/** A stream whose URL may be requested from `availableAt` (epoch ms) on. */
+export type TimedRemoteStream = RemoteStream & { availableAt: number };
