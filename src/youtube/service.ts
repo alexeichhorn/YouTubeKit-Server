@@ -1,9 +1,10 @@
-import { Innertube, Platform } from 'youtubei.js';
+import { Innertube, Platform, YT } from 'youtubei.js';
 import { ServerMessage, ServerMessageType, RemoteURLResponse, RemoteURLRequest, RemoteStream } from './models/websocket';
-import { AvailableInnertubeClient } from './models/internal';
+import { AvailableInnertubeClient, TimedRemoteStream } from './models/internal';
 import { fileExtensionFromMimeType } from './file_extension';
 import { evaluateJavaScript } from './js-evaluator';
 import { applyEmbeddedPlayerConfig, EmbeddedPlayerConfig, extractEmbeddedPlayerConfig } from './embedded-player';
+import { prerollWaitMs } from './preroll';
 
 export class YouTubeService {
    private static readonly PLAYER_ID_OVERRIDE: string | undefined = undefined;
@@ -107,7 +108,12 @@ export class YouTubeService {
          });
          const streams = await this.getStreams(innertube, wsFetch);
 
-         this.send({ type: ServerMessageType.result, content: streams });
+         const sentAt = Date.now();
+         const content: RemoteStream[] = streams.map(({ availableAt, ...stream }) => ({
+            ...stream,
+            available_in_ms: availableAt > sentAt ? Math.ceil(availableAt - sentAt) : undefined,
+         }));
+         this.send({ type: ServerMessageType.result, content });
       } catch (error: any) {
          console.error(error);
          this.websocket.send(JSON.stringify({ type: 'error', message: error.message }));
@@ -248,11 +254,11 @@ export class YouTubeService {
 
    // - InnerTube Methods -
 
-   private async getStreams(innertube: Innertube, fetcher: typeof fetch): Promise<RemoteStream[]> {
+   private async getStreams(innertube: Innertube, fetcher: typeof fetch): Promise<TimedRemoteStream[]> {
       const clients: AvailableInnertubeClient[] = ['TV_SAMSUNG', 'VISIONOS', 'WEB'];
       const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
 
-      let allStreams: RemoteStream[] = [];
+      let allStreams: TimedRemoteStream[] = [];
 
       for (const client of clients) {
          try {
@@ -279,8 +285,8 @@ export class YouTubeService {
       return this.deduplicateStreams(allStreams);
    }
 
-   private deduplicateStreams(streams: RemoteStream[]): RemoteStream[] {
-      const streamsByItag = new Map<number, RemoteStream>();
+   private deduplicateStreams(streams: TimedRemoteStream[]): TimedRemoteStream[] {
+      const streamsByItag = new Map<number, TimedRemoteStream>();
 
       for (const stream of streams) {
          if (!streamsByItag.has(stream.itag)) {
@@ -309,14 +315,31 @@ export class YouTubeService {
       innertube: Innertube,
       client: AvailableInnertubeClient,
       encryptedHostFlags?: string
-   ): Promise<RemoteStream[]> {
-      const info = await innertube.getInfo(this.videoID, { client, encrypted_host_flags: encryptedHostFlags });
+   ): Promise<TimedRemoteStream[]> {
+      // Same request as `innertube.getBasicInfo`, which hides the raw response that preroll ads are only part of
+      const response = await innertube.actions.execute('/player', {
+         videoId: this.videoID,
+         racyCheckOk: true,
+         contentCheckOk: true,
+         playbackContext: {
+            contentPlaybackContext: {
+               vis: 0,
+               splay: false,
+               lactMilliseconds: '-1',
+               signatureTimestamp: innertube.session.player?.signature_timestamp,
+               encryptedHostFlags,
+            },
+         },
+         client,
+      });
+      const availableAt = Date.now() + prerollWaitMs(response.data);
+      const info = new YT.VideoInfo([response], innertube.actions, '');
       const f = info.streaming_data || { formats: [], adaptive_formats: [] };
       const formats = [...(f.formats ?? []), ...(f.adaptive_formats ?? [])].filter(format => !format.drm_families?.length);
 
       // Process formats in batches to reduce memory pressure (avoids exceeding 128MB limit)
       const BATCH_SIZE = 5;
-      const streamsOrNull: (RemoteStream | null)[] = [];
+      const streamsOrNull: (TimedRemoteStream | null)[] = [];
 
       for (let i = 0; i < formats.length; i += BATCH_SIZE) {
          const batch = formats.slice(i, i + BATCH_SIZE);
@@ -366,7 +389,7 @@ export class YouTubeService {
                   mimeType = mimeType.split(';')[0]; // remove codec info
                }
 
-               const stream: RemoteStream = {
+               const stream: TimedRemoteStream = {
                   url: streamUrl,
                   itag: format.itag,
                   ext: fileExtensionFromMimeType(mimeType),
@@ -378,6 +401,7 @@ export class YouTubeService {
                   width: format.width,
                   height: format.height,
                   filesize: format.content_length ? Number(format.content_length) : undefined,
+                  availableAt,
                };
                return stream;
             })
@@ -386,7 +410,7 @@ export class YouTubeService {
          streamsOrNull.push(...batchResults);
       }
 
-      const filteredStreams = streamsOrNull.filter((stream): stream is RemoteStream => stream !== null);
+      const filteredStreams = streamsOrNull.filter((stream): stream is TimedRemoteStream => stream !== null);
 
       return filteredStreams;
    }
