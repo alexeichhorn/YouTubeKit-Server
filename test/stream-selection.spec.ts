@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { Innertube } from 'youtubei.js';
 import { YouTubeService } from '../src/youtube/service';
 
-it('prefers Samsung clear formats while keeping clear alternatives to DRM formats and their preroll wait', async () => {
+it('prefers visionOS clear formats while keeping Samsung clear alternatives to DRM formats and their preroll wait', async () => {
    const clients: string[] = [];
    const service = new YouTubeService('test-video', new WebSocketPair()[1]);
    const innertube = await Innertube.create({
@@ -19,12 +19,12 @@ it('prefers Samsung clear formats while keeping clear alternatives to DRM format
             mimeType: 'video/mp4; codecs="avc1.640028"', bitrate: 1000,
             qualityLabel: '1080p', width: 1920, height: 1080,
          };
-         const formats = client === 'TVHTML5' ? [
+         const formats = client === 'VISIONOS' ? [
             { ...format, itag: 137, url: 'https://example.com/drm', drmFamilies: ['WIDEVINE'] },
-            { ...format, itag: 136, url: 'https://example.com/samsung-clear', drmFamilies: [] },
-         ] : client === 'VISIONOS' ? [
-            { ...format, itag: 137, url: 'https://example.com/vision-clear' },
-            { ...format, itag: 136, url: 'https://example.com/vision-duplicate' },
+            { ...format, itag: 136, url: 'https://example.com/vision-clear', drmFamilies: [] },
+         ] : client === 'TVHTML5' ? [
+            { ...format, itag: 137, url: 'https://example.com/samsung-clear' },
+            { ...format, itag: 136, url: 'https://example.com/samsung-duplicate' },
          ] : [];
          const adPlacements = client === 'TVHTML5' ? [{ adPlacementRenderer: {
             config: { adPlacementConfig: { kind: 'AD_PLACEMENT_KIND_START' } },
@@ -35,11 +35,11 @@ it('prefers Samsung clear formats while keeping clear alternatives to DRM format
    });
    const startedAt = Date.now();
    const streams = await service['getStreams'](innertube, async () => { throw new Error('Unexpected embedded fallback'); });
-   expect(clients).toEqual(['TVHTML5', 'VISIONOS', 'WEB']);
+   expect(clients).toEqual(['VISIONOS', 'TVHTML5', 'WEB']);
    expect(streams.map(({ itag, url }) => ({ itag, url }))).toEqual([
-      { itag: 136, url: 'https://example.com/samsung-clear' },
-      { itag: 137, url: 'https://example.com/vision-clear' },
+      { itag: 136, url: 'https://example.com/vision-clear' },
+      { itag: 137, url: 'https://example.com/samsung-clear' },
    ]);
-   expect(streams[0].availableAt).toBeGreaterThanOrEqual(startedAt + 5000);
-   expect(streams[1].availableAt).toBeLessThan(startedAt + 5000);
+   expect(streams[0].availableAt).toBeLessThan(startedAt + 5000);
+   expect(streams[1].availableAt).toBeGreaterThanOrEqual(startedAt + 5000);
 });
