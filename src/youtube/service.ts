@@ -255,7 +255,7 @@ export class YouTubeService {
    // - InnerTube Methods -
 
    private async getStreams(innertube: Innertube, fetcher: typeof fetch): Promise<TimedRemoteStream[]> {
-      const clients: AvailableInnertubeClient[] = ['TV_SAMSUNG', 'VISIONOS', 'WEB'];
+      const clients: AvailableInnertubeClient[] = ['VISIONOS', 'TV_SAMSUNG', 'WEB'];
       const fallbackClient: AvailableInnertubeClient = 'WEB_EMBEDDED';
 
       let allStreams: TimedRemoteStream[] = [];
